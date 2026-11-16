@@ -7,3 +7,6 @@ target
 .DS_Store
 *.log
 gen/schemas
+.vercel
+.env*
+.e2e-shots

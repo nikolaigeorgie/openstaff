@@ -10,7 +10,7 @@ import { createSession, destroySession, requireOwner } from "@/lib/auth";
 import { hashPassword, inviteCode, verifyPassword } from "@/lib/crypto";
 import { periodReport } from "@/lib/report";
 
-export type FormState = { error?: string } | undefined;
+export type FormState = { error?: string; values?: Record<string, string> } | undefined;
 
 function validTimezone(tz: string): string {
   try {
@@ -39,12 +39,17 @@ const Signup = z.object({
 });
 
 export async function signup(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = {
+    company: String(formData.get("company") ?? ""),
+    name: String(formData.get("name") ?? ""),
+    email: String(formData.get("email") ?? ""),
+  };
   const parsed = Signup.safeParse(Object.fromEntries(formData));
-  if (!parsed.success) return { error: parsed.error.issues[0].message };
+  if (!parsed.success) return { error: parsed.error.issues[0].message, values };
   const { company, name, email, password } = parsed.data;
   const timezone = validTimezone(parsed.data.timezone);
   const [existing] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, email));
-  if (existing) return { error: "There is already an account with that email. Log in instead." };
+  if (existing) return { error: "There is already an account with that email. Log in instead.", values };
   const [org] = await db
     .insert(schema.orgs)
     .values({ name: company, timezone, periodAnchor: thisMonday(timezone) })
@@ -62,7 +67,7 @@ export async function login(_prev: FormState, formData: FormData): Promise<FormS
   const password = String(formData.get("password") ?? "");
   const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email)).limit(1);
   if (!user || !(await verifyPassword(password, user.passwordHash))) {
-    return { error: "Wrong email or password." };
+    return { error: "Wrong email or password.", values: { email } };
   }
   await createSession({ userId: user.id });
   redirect("/team");

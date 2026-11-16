@@ -19,7 +19,7 @@ use tauri_plugin_updater::UpdaterExt as _;
 /// Where the app reports to unless told otherwise. Set OPENSTAFF_SERVER at build time to change it.
 const DEFAULT_SERVER: &str = match option_env!("OPENSTAFF_SERVER") {
     Some(server) => server,
-    None => "https://web-production-9c3f68b9.up.railway.app",
+    None => "https://openstaff-app.vercel.app",
 };
 
 pub struct Shared {

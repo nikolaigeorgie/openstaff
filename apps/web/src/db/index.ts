@@ -8,7 +8,12 @@ function client() {
   if (!globalForDb.pg) {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL is not set");
-    globalForDb.pg = postgres(url, { max: Number(process.env.DB_POOL ?? 10) });
+    // A pooled address (pgbouncer, as on Neon) cannot use prepared statements.
+    globalForDb.pg = postgres(url, {
+      max: Number(process.env.DB_POOL ?? 5),
+      idle_timeout: 20,
+      prepare: !url.includes("-pooler"),
+    });
   }
   return globalForDb.pg;
 }

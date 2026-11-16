@@ -2,6 +2,7 @@ import { and, desc, eq, gt, inArray, isNull } from "drizzle-orm";
 import { headers } from "next/headers";
 import { addMember, archiveMember, createInvite, revokeDevice, updateMember, updateOrg } from "@/app/actions";
 import { Copy } from "@/components/copy";
+import { ConfirmButton, SaveButton } from "@/components/form-buttons";
 import { db, schema } from "@/db";
 import { requireOwner } from "@/lib/auth";
 import { ago } from "@/lib/format";
@@ -68,7 +69,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                   <label className="label" htmlFor={`rate-${m.id}`}>Hourly rate ($)</label>
                   <input className="input" id={`rate-${m.id}`} name="rate" type="number" min="0" step="0.01" defaultValue={(m.hourlyRateCents / 100).toFixed(2)} />
                 </div>
-                <button className="btn-quiet">Save</button>
+                <SaveButton />
               </form>
 
               <div className="text-sm">
@@ -84,7 +85,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                         </span>
                         <form action={revokeDevice}>
                           <input type="hidden" name="deviceId" value={d.id} />
-                          <button className="text-xs text-muted underline">Disconnect</button>
+                          <ConfirmButton label="Disconnect" confirm="Click again to disconnect" />
                         </form>
                       </li>
                     ))}
@@ -98,6 +99,14 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                     <span className="text-muted">Invite link</span>
                     <code className="rounded bg-bg px-2 py-1 font-mono text-xs break-all">{link}</code>
                     <Copy text={link} label="Copy link" />
+                    <a
+                      className="btn-quiet"
+                      href={`mailto:?subject=${encodeURIComponent(`Set up Open Staff for ${org.name}`)}&body=${encodeURIComponent(
+                        `Hi ${m.name},\n\n${org.name} uses Open Staff to count work hours. There is no timer to start or stop.\n\nOpen this link to install it and connect your computer:\n${link}\n\nThe page shows exactly what it records and what it never records.`,
+                      )}`}
+                    >
+                      Email invite
+                    </a>
                   </>
                 ) : (
                   <form action={createInvite}>
@@ -107,7 +116,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 )}
                 <form action={archiveMember} className="ml-auto">
                   <input type="hidden" name="memberId" value={m.id} />
-                  <button className="text-xs text-muted underline">Remove from team</button>
+                  <ConfirmButton label="Remove from team" confirm={`Click again to remove ${m.name}`} />
                 </form>
               </div>
             </div>
@@ -133,7 +142,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <p className="text-sm text-muted sm:col-span-2">
             Pay periods are two weeks long and repeat from that date.
           </p>
-          <div className="sm:text-right"><button className="btn-quiet">Save</button></div>
+          <div className="sm:text-right"><SaveButton /></div>
         </form>
       </section>
 

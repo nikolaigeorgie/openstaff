@@ -8,7 +8,9 @@
     "start": "tsx src/db/migrate.ts && next start",
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "vercel-build": "tsx src/db/migrate.ts && next build",
+    "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
     "@openstaff/core": "workspace:*",
@@ -30,6 +32,7 @@
     "drizzle-kit": "^0.31.0",
     "eslint": "^9",
     "eslint-config-next": "16.4.6",
+    "puppeteer-core": "^25.17.0",
     "tailwindcss": "4.3.3",
     "typescript": "^5"
   }

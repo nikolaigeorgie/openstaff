@@ -47,9 +47,18 @@ pnpm dev:web
 # desktop: needs Rust (https://rustup.rs)
 cd apps/desktop && pnpm tauri dev
 cd apps/desktop/src-tauri && cargo test --workspace
+
+# full walkthrough in a real browser against a local copy: sign up, add people, invite,
+# connect computers, upload work, payroll, employee view, permissions (80 checks)
+pnpm --filter @openstaff/web e2e http://localhost:3000
 ```
 
 `OPENSTAFF_SERVER` at build time sets the server the desktop app reports to.
+
+## Deploy
+
+The web app runs on Vercel (project root `apps/web`) with a Neon Postgres database. `vercel deploy --prod`
+from the repo root; migrations run during the build.
 
 ## Release
 

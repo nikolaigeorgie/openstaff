@@ -16,18 +16,18 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
         <>
           <div>
             <label className="label" htmlFor="company">Company name</label>
-            <input className="input" id="company" name="company" required autoComplete="organization" />
+            <input className="input" id="company" name="company" required defaultValue={state?.values?.company} autoComplete="organization" />
           </div>
           <div>
             <label className="label" htmlFor="name">Your name</label>
-            <input className="input" id="name" name="name" required autoComplete="name" />
+            <input className="input" id="name" name="name" required defaultValue={state?.values?.name} autoComplete="name" />
           </div>
           <input type="hidden" name="timezone" value={timezone} />
         </>
       )}
       <div>
         <label className="label" htmlFor="email">Email</label>
-        <input className="input" id="email" name="email" type="email" required autoComplete="email" />
+        <input className="input" id="email" name="email" type="email" required defaultValue={state?.values?.email} autoComplete="email" />
       </div>
       <div>
         <label className="label" htmlFor="password">Password</label>

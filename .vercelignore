@@ -1,0 +1,8 @@
+node_modules
+**/node_modules
+**/.next
+**/target
+apps/desktop/src-tauri
+apps/desktop/dist
+.git
+**/.env*

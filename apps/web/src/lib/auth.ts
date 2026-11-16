@@ -56,7 +56,7 @@ export async function getSession(): Promise<Session | null> {
   }
   if (row.memberId) {
     const [member] = await db.select().from(schema.members).where(eq(schema.members.id, row.memberId)).limit(1);
-    if (!member) return null;
+    if (!member || member.archivedAt) return null;
     const [org] = await db.select().from(schema.orgs).where(eq(schema.orgs.id, member.orgId)).limit(1);
     return org ? { kind: "member", member, org } : null;
   }

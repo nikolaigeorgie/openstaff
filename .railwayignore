@@ -1,5 +1,0 @@
-apps/desktop
-node_modules
-**/node_modules
-**/.next
-**/target
