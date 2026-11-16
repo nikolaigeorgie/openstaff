@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f7f7f4;
+  --surface: #ffffff;
+  --border: #e4e4de;
+  --text: #1a1c19;
+  --muted: #6b6f68;
+  --accent: #14794a;
+  --accent-ink: #ffffff;
+  --active: #1a9c5e;
+  --grace: #9bdcb8;
+  --claude: #7c5cf0;
+  --idle: #dcdcd6;
+  --paused: #e9a13b;
+  --weak: #d9483b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111311;
+    --surface: #1a1d1a;
+    --border: #2c302c;
+    --text: #eceee9;
+    --muted: #979c93;
+    --accent: #3fc286;
+    --accent-ink: #0c1a12;
+    --active: #3fc286;
+    --grace: #2a6b4b;
+    --claude: #9d85ff;
+    --idle: #343834;
+    --paused: #d99a3d;
+    --weak: #ef6b5e;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-active: var(--active);
+  --color-grace: var(--grace);
+  --color-claude: var(--claude);
+  --color-idle: var(--idle);
+  --color-paused: var(--paused);
+  --color-weak: var(--weak);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-border bg-surface;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-accent-ink transition hover:opacity-90 disabled:opacity-50;
+  }
+  .btn-quiet {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text transition hover:bg-bg;
+  }
+  .input {
+    @apply w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text outline-none focus:border-accent;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium text-muted;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  .th {
+    @apply px-3 py-2 text-left text-xs font-medium text-muted;
+  }
+  .td {
+    @apply px-3 py-2.5 text-sm;
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@openstaff/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "tsx src/db/migrate.ts && next start",
+    "lint": "eslint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@openstaff/core": "workspace:*",
+    "drizzle-orm": "^0.44.0",
+    "next": "16.4.6",
+    "postgres": "^3.4.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tsx": "^4.19.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16",
+    "@electric-sql/pglite-socket": "^0.2.19",
+    "@tailwindcss/turbopack": "4.3.3",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.6",
+    "tailwindcss": "4.3.3",
+    "typescript": "^5"
+  }
+}
