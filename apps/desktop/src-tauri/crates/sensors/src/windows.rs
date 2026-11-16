@@ -1,0 +1,164 @@
+use crate::Counts;
+use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Once;
+use windows_sys::Win32::Foundation::{CloseHandle, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::SystemInformation::GetTickCount;
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId,
+    SetWindowsHookExW, TranslateMessage, MSG, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
+    WM_XBUTTONDOWN,
+};
+
+static KEYS: AtomicU32 = AtomicU32::new(0);
+static CLICKS: AtomicU32 = AtomicU32::new(0);
+static MOVES: AtomicU32 = AtomicU32::new(0);
+static HOOKS: Once = Once::new();
+
+// The hooks only add one to a counter. The key code and pointer position passed in `lparam`
+// are never read.
+unsafe extern "system" fn on_keyboard(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let message = wparam as u32;
+        if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
+            KEYS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+unsafe extern "system" fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        match wparam as u32 {
+            WM_MOUSEMOVE => {
+                MOVES.fetch_add(1, Ordering::Relaxed);
+            }
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN | WM_MOUSEWHEEL
+            | WM_MOUSEHWHEEL => {
+                CLICKS.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+fn install_hooks() {
+    HOOKS.call_once(|| {
+        // Low-level hooks are delivered to the thread that installed them, which must pump messages.
+        std::thread::spawn(|| unsafe {
+            let module = GetModuleHandleW(std::ptr::null());
+            SetWindowsHookExW(WH_KEYBOARD_LL, Some(on_keyboard), module, 0);
+            SetWindowsHookExW(WH_MOUSE_LL, Some(on_mouse), module, 0);
+            let mut msg: MSG = std::mem::zeroed();
+            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        });
+    });
+}
+
+#[derive(Clone, Copy)]
+struct Snapshot {
+    keys: u32,
+    clicks: u32,
+    moves: u32,
+}
+
+fn snapshot() -> Snapshot {
+    Snapshot {
+        keys: KEYS.load(Ordering::Relaxed),
+        clicks: CLICKS.load(Ordering::Relaxed),
+        moves: MOVES.load(Ordering::Relaxed),
+    }
+}
+
+pub struct Inner {
+    last: Snapshot,
+}
+
+impl Inner {
+    pub fn start() -> Self {
+        install_hooks();
+        Inner { last: snapshot() }
+    }
+
+    pub fn take(&mut self) -> Counts {
+        let now = snapshot();
+        let counts = Counts {
+            keys: now.keys.wrapping_sub(self.last.keys),
+            clicks: now.clicks.wrapping_sub(self.last.clicks),
+            moves: now.moves.wrapping_sub(self.last.moves),
+        };
+        self.last = now;
+        counts
+    }
+}
+
+pub fn idle_seconds() -> f64 {
+    unsafe {
+        let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        if GetLastInputInfo(&mut info) == 0 {
+            return 0.0;
+        }
+        GetTickCount().wrapping_sub(info.dwTime) as f64 / 1000.0
+    }
+}
+
+/// Name of the program that owns the foreground window, e.g. "Code" or "chrome".
+pub fn front_app() -> Option<String> {
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(window, &mut pid);
+        if pid == 0 {
+            return None;
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let mut buffer = [0u16; 1024];
+        let mut len = buffer.len() as u32;
+        let ok = QueryFullProcessImageNameW(process, 0, buffer.as_mut_ptr(), &mut len);
+        CloseHandle(process);
+        if ok == 0 {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&buffer[..len as usize]);
+        let stem = Path::new(&path).file_stem()?.to_string_lossy().to_string();
+        Some(friendly(&stem))
+    }
+}
+
+fn friendly(stem: &str) -> String {
+    match stem.to_ascii_lowercase().as_str() {
+        "chrome" => "Google Chrome".into(),
+        "msedge" => "Microsoft Edge".into(),
+        "firefox" => "Firefox".into(),
+        "brave" => "Brave Browser".into(),
+        "code" => "Code".into(),
+        "windowsterminal" => "Terminal".into(),
+        "explorer" => "File Explorer".into(),
+        _ => stem.to_string(),
+    }
+}
+
+pub fn is_browser(_app: &str) -> bool {
+    false
+}
+
+/// Reading the front tab's site is not implemented on Windows yet.
+pub fn browser_url(_app: &str) -> Option<String> {
+    None
+}

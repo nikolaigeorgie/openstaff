@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Open Staff</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="brand">Open Staff</span>
+        <span class="org" id="org"></span>
+      </header>
+
+      <section id="setup" hidden>
+        <h1>Connect this computer</h1>
+        <p class="muted">Paste the code from your invite link. You only do this once.</p>
+        <form id="connect">
+          <label for="code">Invite code</label>
+          <input id="code" autocomplete="off" spellcheck="false" placeholder="ABCDE-FGHJK" required />
+          <details>
+            <summary>Advanced</summary>
+            <label for="server">Server address</label>
+            <input id="server" autocomplete="off" spellcheck="false" />
+          </details>
+          <button id="connect-btn">Connect</button>
+        </form>
+      </section>
+
+      <section id="main" hidden>
+        <p class="muted" id="hello"></p>
+        <div class="today">
+          <span class="num" id="today">0h 00m</span>
+          <span class="muted" id="state">counted today</span>
+        </div>
+        <div class="row">
+          <button id="pause" class="quiet">Pause for private time</button>
+          <button id="mine" class="quiet">See what is recorded</button>
+        </div>
+        <div class="facts">
+          <p><strong>Recorded:</strong> how much you type and click (counts only), the app or site in front, Claude Code usage, and your commits.</p>
+          <p><strong>Never recorded:</strong> what you type, your screen, page contents, or your Claude conversations.</p>
+          <p>There is no timer to start. Time counts while you work and stops when you stop. You can close this window; Open Staff stays in your menu bar or tray.</p>
+        </div>
+      </section>
+
+      <p id="error" class="error" role="alert" hidden></p>
+      <footer class="muted" id="version"></footer>
+    </main>
+  </body>
+</html>
