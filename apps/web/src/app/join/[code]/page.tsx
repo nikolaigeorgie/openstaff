@@ -43,9 +43,18 @@ export default async function JoinPage({ params }: { params: Promise<{ code: str
                 <a className="btn" href="/download/windows">Download for Windows</a>
               </div>
               <p className="mt-3 text-sm text-muted">
-                The app is not signed yet, so your computer will warn you the first time. On Mac: right-click
-                the app and choose Open. On Windows: click More info, then Run anyway.
+                The app is not signed yet, so your computer will warn you the first time.
               </p>
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-muted">
+                <li>
+                  <span className="text-text">Mac:</span> drag Open Staff into Applications and open it. When the
+                  warning appears, click Done. Then open System Settings, go to Privacy &amp; Security, scroll
+                  down and click Open Anyway next to Open Staff.
+                </li>
+                <li>
+                  <span className="text-text">Windows:</span> click More info, then Run anyway.
+                </li>
+              </ul>
             </li>
             <li className="card p-5">
               <p className="font-medium">2. Paste this code when it asks</p>
