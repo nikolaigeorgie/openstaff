@@ -250,7 +250,7 @@ const link = await api("/api/me/link", { token: aniaToken, method: "POST" });
 check("tray gives a one-time link", link.status === 200 && link.json.url.startsWith(base), link.json?.url?.slice(0, 60));
 await emp.goto(link.json.url, { waitUntil: "networkidle0" });
 body = await text(emp);
-check("employee sees own page", emp.url().endsWith("/me") && body.includes("Ania") && body.includes("exactly what"));
+check("employee sees own page", emp.url().endsWith("/me") && body.includes("Ania") && body.includes("everything Open Staff records about you"));
 check("employee sees the same counted time as the owner", /Counted time\s+3h 2[12]m/.test(body), body.match(/Counted time\s+\S+ \S+/)?.[0]);
 check("employee cannot add or remove time", !body.includes("Add time") && !body.includes("Remove"));
 await shot(emp, "09-employee-me");
@@ -343,6 +343,187 @@ check("email kept after wrong password", (await page.$eval("#email", (e) => e.va
 await page.type("#password", owner.password);
 await Promise.all([page.waitForNavigation({ waitUntil: "networkidle0" }), page.click("button.btn")]);
 check("log in works", page.url().endsWith("/team"), page.url());
+
+
+// 16. Projects: a day across repos, a web panel, Slack, a call and a side project
+await go(page, "/settings");
+await addPerson("Leo", "60");
+const leo = await inviteFor("Leo");
+const leoToken = (await claim(leo.link.split("/join/")[1], { hostname: "Leos-MacBook" })).json?.token;
+{
+  const now = Math.floor(Date.now() / 60_000);
+  let m = now - 141;
+  const minutes = [], claude = [];
+  const add = (n, row) => { for (let i = 0; i < n; i++, m++) minutes.push({ m, keys: 80, clicks: 4, moves: 20, domain: null, ...row }); };
+  const start = m;
+  add(40, { app: "Ghostty", repo: "slabdynasty", title: "zsh" });
+  for (let i = 0; i < 10; i++) {
+    claude.push({ m: start + i, sessionId: "a", project: "slabdynasty", prompts: i === 0 ? 1 : 0, tokens: 900 });
+    claude.push({ m: start + i, sessionId: "b", project: "nami-panel", prompts: i === 0 ? 2 : 0, tokens: 700 });
+  }
+  add(5, { app: "Finder", title: "Downloads" });
+  add(10, { app: "Ghostty", repo: "slabdynasty", title: "zsh" });
+  add(20, { app: "Google Chrome", domain: "admin.nami.com", path: "/panel/users", title: "Users - Nami Admin" });
+  add(15, { app: "Slack", title: "nami-dev (Channel) - Acme - Slack" });
+  add(30, { app: "zoom.us", title: "Zoom Meeting", call: true, keys: 0, clicks: 0, moves: 0 });
+  add(20, { app: "Cursor", title: "page.tsx — sidegig" });
+  const up = await api("/api/ingest", { token: leoToken, body: { minutes, claude, commits: [{ sha: (stamp + 1).toString(16).padStart(12, "0") + "feed", repo: "slabdynasty", m: start + 30, added: 10, removed: 2, subject: "Fix grading" }] } });
+  eq("project day uploaded and fully counted, call included", up.json?.today?.verifiedMinutes, 140);
+}
+const sortRow = async (pg, label, choice) => {
+  const ok = await pg.evaluate((label, choice) => {
+    const li = [...document.querySelectorAll("li")].find((l) => l.querySelector("p")?.innerText.trim() === label && l.querySelector('select[name="projectId"]'));
+    if (!li) return false;
+    const sel = li.querySelector("select");
+    const opt = [...sel.options].find((o) => o.text.startsWith(choice));
+    if (!opt) return false;
+    sel.value = opt.value;
+    li.querySelector("button").click();
+    return true;
+  }, label, choice);
+  if (!ok) check(`can sort "${label}" into "${choice}"`, false);
+  await new Promise((r) => setTimeout(r, 400));
+  await page.waitForNetworkIdle({ idleTime: 600 }).catch(() => {});
+};
+const rowOf = (pg, name) => pg.evaluate((name) => [...document.querySelectorAll("tbody tr")].find((r) => r.innerText.trim().startsWith(name))?.innerText.replace(/\s+/g, " ") ?? "", name);
+
+await go(page, "/projects");
+body = await text(page);
+
+check("projects: unsorted lists the repo, site, Slack channel, call app and editor window", ["slabdynasty", "admin.nami.com", "Slack · #nami-dev (Acme)", "zoom.us · Zoom Meeting", "Cursor · sidegig"].every((l) => body.includes(l)));
+await shot(page, "14-projects-unsorted");
+await sortRow(page, "slabdynasty", "New project");
+check("projects: repo becomes a project, short Finder detour carried in (40+5+10)", (await rowOf(page, "slabdynasty")).includes("0h 55m"), await rowOf(page, "slabdynasty"));
+check("projects: Finder detour no longer unsorted", !(await text(page)).includes("Finder"));
+
+await go(page, "/invoices");
+await page.type("#c-new", "Nami Inc");
+await page.type("#c-new-details", "1 Harbor Way");
+await clickText(page, "button", "Add client");
+await go(page, "/projects");
+await page.type("#p-name", "Nami Panel");
+await page.select("#p-client", await page.$eval("#p-client", (s) => [...s.options].find((o) => o.text === "Nami Inc").value));
+await page.type("#p-rate", "100");
+await clickText(page, "button", "Add project");
+await sortRow(page, "admin.nami.com", "Nami Panel");
+await sortRow(page, "Slack · #nami-dev (Acme)", "Nami Panel");
+await sortRow(page, "zoom.us · Zoom Meeting", "Nami Panel");
+let nami = await rowOf(page, "Nami Panel");
+check("projects: site + Slack channel + call add up to 1h 05m, worth $108.33", nami.includes("1h 05m") && nami.includes("$108.33"), nami);
+// A repo rule added by hand on the project page
+await page.evaluate(() => [...document.querySelectorAll("tbody a")].find((a) => a.innerText === "Nami Panel").click());
+await page.waitForNavigation({ waitUntil: "networkidle0" });
+await page.type("#r-match", "nami-panel");
+await clickText(page, "button", "Add rule");
+body = await text(page);
+check("project page: rules listed, Claude prompts and solo time shown", body.includes("nami-panel") && body.includes("2 prompts") && body.includes("0h 10m working alone"), body.match(/Claude\s+.*\n.*\n.*/)?.[0]);
+check("project page: what the time was", body.includes("Slack · #nami-dev (Acme)") && body.includes("zoom.us · Zoom Meeting"));
+await shot(page, "15-project-detail");
+await go(page, "/projects");
+nami = await rowOf(page, "Nami Panel");
+check("projects: parallel Claude session is shown but not billed twice", nami.includes("1h 05m") && nami.includes("+0h 10m Claude alone"), nami);
+const slab = await rowOf(page, "slabdynasty");
+check("projects: commits and Claude prompts land on the repo's project", /\b1 \+10 \/ -2/.test(slab) && slab.includes("Leo 0h 55m"), slab);
+body = await text(page);
+check("projects: only the side project is left unsorted", body.includes("Cursor · sidegig") && !body.includes("Finder") && !/admin\.nami\.com\n/.test(body));
+await shot(page, "16-projects-sorted");
+
+// Person page shows the day by project
+await go(page, `/people/${leo.memberId}`);
+body = await text(page);
+check("person: day by project and in order", body.includes("By project") && /Nami Panel\s+1h 05m/.test(body) && body.includes("On a call"), body.match(/By project[\s\S]{0,120}/)?.[0]);
+await shot(page, "17-person-projects");
+
+// Invoice
+const todayStr = await page.evaluate(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
+const makeInvoice = async (pg, basePath) => {
+  await pg.goto(`${base}${basePath}/invoices`, { waitUntil: "networkidle0" });
+  await pg.select("#i-client", await pg.$eval("#i-client", (s) => s.options[1].value));
+  for (const id of ["#i-from", "#i-to"]) await pg.$eval(id, (e, v) => { e.value = v; }, todayStr);
+  await pg.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.innerText === "Create invoice").click());
+  await new Promise((r) => setTimeout(r, 2500));
+  await pg.waitForNetworkIdle({ idleTime: 600 }).catch(() => {});
+};
+await makeInvoice(page, "");
+body = await text(page);
+check("invoice: 1.08 hours of Nami Panel at $100 = $108.33", /\/invoices\/[0-9a-f-]{36}$/.test(page.url()) && body.includes("INV-0001") && body.includes("1.08") && /Total due\s+\$108\.33/.test(body) && body.includes("1 Harbor Way"), page.url());
+await shot(page, "18-invoice");
+const invCsv = await page.evaluate(async () => (await fetch(location.pathname + "/csv")).text());
+check("invoice csv", invCsv.includes("Nami Panel,1.08,100.00,108.33"), invCsv.slice(0, 80));
+await page.$eval("#hours-0", (e) => { e.value = ""; });
+await page.type("#hours-0", "2");
+await clickText(page, "button", "Save");
+check("invoice: edited hours change the total", /Total due\s+\$200\.00/.test(await text(page)));
+await clickText(page, "button", "Mark as sent");
+check("invoice: sent invoices are fixed", (await text(page)).includes("its numbers are fixed"));
+await makeInvoice(page, "");
+check("invoice: the same time cannot be invoiced twice", (await text(page)).includes("already on another invoice"));
+
+// 17. Leo's own private project
+const leoLink = await api("/api/me/link", { token: leoToken, method: "POST" });
+const ctxLeo = await browser.createBrowserContext();
+const lp = await newPage(ctxLeo);
+await lp.goto(leoLink.json.url, { waitUntil: "networkidle0" });
+await lp.goto(`${base}/me/projects`, { waitUntil: "networkidle0" });
+body = await text(lp);
+check("own pages: sees company projects as shared and own unsorted time", body.includes("My projects") && body.includes("Acme Studio LLC project") && body.includes("Cursor · sidegig"));
+await lp.evaluate(() => {
+  const li = [...document.querySelectorAll("li")].find((l) => l.querySelector("p")?.innerText.trim() === "Cursor · sidegig");
+  const sel = li.querySelector("select");
+  sel.value = "new";
+  li.querySelector("button").click();
+});
+await new Promise((r) => setTimeout(r, 1500));
+await lp.waitForNetworkIdle({ idleTime: 600 }).catch(() => {});
+check("own pages: side project created privately with its 20 minutes", (await rowOf(lp, "sidegig")).includes("0h 20m"), await rowOf(lp, "sidegig"));
+await lp.goto(`${base}/me/invoices`, { waitUntil: "networkidle0" });
+await lp.type("#c-new", "Side Client");
+await lp.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.innerText === "Add client").click());
+await new Promise((r) => setTimeout(r, 1500));
+await lp.goto(`${base}/me/projects`, { waitUntil: "networkidle0" });
+await lp.evaluate(() => [...document.querySelectorAll("tbody a")].find((a) => a.innerText === "sidegig").click());
+await lp.waitForNavigation({ waitUntil: "networkidle0" });
+await lp.select("#d-client", await lp.$eval("#d-client", (s) => s.options[1].value));
+await lp.$eval("#d-rate", (e) => { e.value = ""; });
+await lp.type("#d-rate", "90");
+await lp.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.innerText === "Save").click());
+await new Promise((r) => setTimeout(r, 1500));
+await makeInvoice(lp, "/me");
+body = await text(lp);
+check("own pages: private invoice in own name, 0.33h at $90 = $30.00", body.includes("Leo") && /Total due\s+\$30\.00/.test(body) && body.includes("INV-0001"), lp.url());
+await lp.goto(`${base}/me`, { waitUntil: "networkidle0" });
+body = await text(lp);
+check("own day: company time is 2h 00m, side project named for them only", /Counted time\s+2h 00m/.test(body) && body.includes("on own projects not counted") && body.includes("sidegig"), body.match(/Counted time\s+\S+ \S+/)?.[0]);
+await shot(lp, "19-me-day");
+
+await go(page, "/projects");
+body = await text(page);
+check("company: side project is invisible, shown only as own-project time", !body.includes("sidegig") && /On people's own projects\s+0h 20m/.test(body) );
+await go(page, `/people/${leo.memberId}`);
+body = await text(page);
+check("company: person page hides the side project's details", !body.includes("sidegig") && !body.includes("Cursor") && body.includes("Details are private") && /Counted time\s+2h 00m/.test(body));
+await go(page, "/invoices");
+check("company: cannot see the private client or invoice", !(await text(page)).includes("Side Client"));
+await go(page, "/payroll");
+check("payroll: Leo is paid for 2h 00m at $60 = $120.00, side project left out", (await rowOf(page, "Leo")).includes("$120.00"), await rowOf(page, "Leo"));
+await go(page, "/team");
+check("team: shows the project someone is on", /Leo[\s\S]{0,80}(Working now|idle)/.test(await text(page)));
+const r1 = await lp.goto(`${base}/projects`, { waitUntil: "networkidle0" });
+check("own pages: company Projects page is closed to a person", lp.url().endsWith("/me"), lp.url());
+// Claude suggestions from the person's computer
+const uns = await api("/api/me/unsorted", { token: leoToken });
+check("suggest: device gets its projects and unsorted labels", uns.status === 200 && uns.json.projects.some((p) => p.name === "Nami Panel") && Array.isArray(uns.json.unsorted), JSON.stringify(uns.json).slice(0, 100));
+const sug = await api("/api/me/suggestions", { token: leoToken, body: { suggestions: [], day: uns.json.day, summary: "Worked on Slab Dynasty grading and the Nami admin panel." } });
+eq("suggest: summary accepted", sug.status, 200);
+await go(page, `/people/${leo.memberId}`);
+check("person: day summary shown", (await text(page)).includes("Worked on Slab Dynasty grading"));
+for (const [path, name] of [["/projects", "20-phone-projects"], ["/invoices", "21-phone-invoices"]]) {
+  await page.setViewport({ width: 390, height: 800, isMobile: true });
+  await go(page, path);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  check(`phone: ${path.slice(1)} has no sideways page scroll`, overflow <= 0, `${overflow}px`);
+  await shot(page, name);
+}
 
 await browser.close();
 const failed = results.filter((r) => !r.ok);

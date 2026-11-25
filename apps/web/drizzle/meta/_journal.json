@@ -8,6 +8,13 @@
       "when": 1794788665382,
       "tag": "0000_early_vivisector",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795649838148,
+      "tag": "0001_projects",
+      "breakpoints": true
     }
   ]
 }

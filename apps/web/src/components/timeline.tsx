@@ -1,9 +1,12 @@
-import type { HourSummary, MinuteStatus, VerifiedMinute } from "@openstaff/core";
+import type { HourSummary, MinuteStatus } from "@openstaff/core";
+import { worked, type SortedMinute } from "@/lib/report";
 
 const fill: Record<MinuteStatus, string> = {
   active: "var(--active)",
   grace: "var(--grace)",
   claude: "var(--claude)",
+  meeting: "var(--meeting)",
+  personal: "var(--personal)",
   idle: "var(--idle)",
   paused: "var(--paused)",
 };
@@ -12,6 +15,7 @@ export const legend: [MinuteStatus | "weak", string][] = [
   ["active", "Typing or clicking"],
   ["grace", "Reading or thinking"],
   ["claude", "Waiting on Claude"],
+  ["meeting", "On a call"],
   ["idle", "Idle, not counted"],
   ["paused", "Paused, not counted"],
   ["weak", "Thin evidence"],
@@ -23,11 +27,14 @@ export function Timeline({
   hours,
   fromM,
   toM,
+  colors,
 }: {
-  minutes: VerifiedMinute[];
+  minutes: SortedMinute[];
   hours: HourSummary[];
   fromM: number;
   toM: number;
+  /** Project id to colour. Minutes of a project are drawn in a thin strip under the day. */
+  colors?: Map<string, string>;
 }) {
   const width = toM - fromM;
   const runs: { x: number; w: number; status: MinuteStatus }[] = [];
@@ -36,6 +43,16 @@ export function Timeline({
     const last = runs[runs.length - 1];
     if (last && last.status === v.status && last.x + last.w === x) last.w++;
     else runs.push({ x, w: 1, status: v.status });
+  }
+  const projectRuns: { x: number; w: number; color: string }[] = [];
+  for (const v of minutes) {
+    if (!worked(v)) continue;
+    const color = v.projectId ? colors?.get(v.projectId) ?? "var(--personal)" : v.personal ? "var(--personal)" : null;
+    if (!color) continue;
+    const x = v.m - fromM;
+    const last = projectRuns[projectRuns.length - 1];
+    if (last && last.color === color && last.x + last.w === x) last.w++;
+    else projectRuns.push({ x, w: 1, color });
   }
   const ticks = Array.from({ length: Math.floor(width / 60) + 1 }, (_, i) => i);
   const label = (h: number) => (h % 24 === 0 ? "12a" : h === 12 ? "12p" : h < 12 ? `${h}a` : `${h - 12}p`);
@@ -50,7 +67,10 @@ export function Timeline({
       >
         <rect x={0} y={8} width={width} height={44} rx={4} fill="var(--bg)" />
         {runs.map((r) => (
-          <rect key={r.x} x={r.x} y={8} width={r.w} height={44} fill={fill[r.status]} />
+          <rect key={r.x} x={r.x} y={8} width={r.w} height={34} fill={fill[r.status]} />
+        ))}
+        {projectRuns.map((r) => (
+          <rect key={r.x} x={r.x} y={44} width={r.w} height={8} fill={r.color} />
         ))}
         {hours
           .filter((h) => h.evidence === "weak")

@@ -8,7 +8,9 @@ import { z } from "zod";
 import { db, schema } from "@/db";
 import { createSession, destroySession, requireOwner } from "@/lib/auth";
 import { hashPassword, inviteCode, verifyPassword } from "@/lib/crypto";
+import { amount, draftLines } from "@/lib/invoices";
 import { periodReport } from "@/lib/report";
+import { COLORS, getScope, scopeClient, scopeInvoice, scopeInvoices, scopeProject, scopeProjects, uuid, type Scope } from "@/lib/scope";
 
 export type FormState = { error?: string; values?: Record<string, string> } | undefined;
 
@@ -219,4 +221,233 @@ export async function unlockPeriod(formData: FormData) {
     .delete(schema.periodLocks)
     .where(and(eq(schema.periodLocks.orgId, org.id), eq(schema.periodLocks.periodIndex, index)));
   revalidatePath("/payroll");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Projects, sorting, clients and invoices. These work for the owner (the company's) and for a
+// person on their own pages (their private ones); getScope() decides which.
+
+function refresh() {
+  revalidatePath("/", "layout");
+}
+
+async function makeProject(scope: Scope, name: string, clientId?: string | null, rate?: FormDataEntryValue | null) {
+  const count = (await scopeProjects(scope)).length;
+  const [project] = await db
+    .insert(schema.projects)
+    .values({
+      orgId: scope.org.id,
+      ownerMemberId: scope.ownerMemberId,
+      name: name.slice(0, 80),
+      color: COLORS[count % COLORS.length],
+      clientId: clientId ?? null,
+      rateCents: cents(rate ?? null),
+    })
+    .returning();
+  return project;
+}
+
+export async function createProject(formData: FormData) {
+  const scope = await getScope();
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) return;
+  const client = await scopeClient(scope, formData.get("clientId"));
+  await makeProject(scope, name, client?.id, formData.get("rate"));
+  refresh();
+}
+
+export async function updateProject(formData: FormData) {
+  const scope = await getScope();
+  const project = await scopeProject(scope, formData.get("projectId"));
+  if (!project) return;
+  const client = await scopeClient(scope, formData.get("clientId"));
+  const color = String(formData.get("color") ?? project.color);
+  await db
+    .update(schema.projects)
+    .set({
+      name: String(formData.get("name") ?? "").trim().slice(0, 80) || project.name,
+      clientId: client?.id ?? null,
+      rateCents: cents(formData.get("rate")),
+      color: /^#[0-9a-f]{6}$/i.test(color) ? color : project.color,
+    })
+    .where(eq(schema.projects.id, project.id));
+  refresh();
+}
+
+export async function deleteProject(formData: FormData) {
+  const scope = await getScope();
+  const project = await scopeProject(scope, formData.get("projectId"));
+  if (!project) return;
+  await db.delete(schema.projects).where(eq(schema.projects.id, project.id));
+  refresh();
+  redirect(`${scope.base}/projects`);
+}
+
+const FIELDS = ["repo", "url", "title", "site", "app"] as const;
+
+async function addRuleTo(projectId: string, field: string, match: string, app: string | null) {
+  if (!(FIELDS as readonly string[]).includes(field) || !match) return;
+  const [same] = await db
+    .select({ id: schema.rules.id })
+    .from(schema.rules)
+    .where(and(eq(schema.rules.projectId, projectId), eq(schema.rules.field, field), eq(schema.rules.match, match)));
+  if (!same) await db.insert(schema.rules).values({ projectId, field, match: match.slice(0, 300), app: app || null });
+}
+
+export async function addRule(formData: FormData) {
+  const scope = await getScope();
+  const project = await scopeProject(scope, formData.get("projectId"));
+  if (!project) return;
+  let match = String(formData.get("match") ?? "").trim();
+  const field = String(formData.get("field"));
+  if (field === "url" || field === "site") match = match.replace(/^https?:\/\//i, "").replace(/[?#].*$/, "").replace(/\/$/, "");
+  await addRuleTo(project.id, field, match, String(formData.get("app") ?? "").trim() || null);
+  refresh();
+}
+
+export async function deleteRule(formData: FormData) {
+  const scope = await getScope();
+  const id = formData.get("id");
+  if (!uuid(id)) return;
+  const [row] = await db.select().from(schema.rules).where(eq(schema.rules.id, id)).limit(1);
+  if (!row || !(await scopeProject(scope, row.projectId))) return;
+  await db.delete(schema.rules).where(eq(schema.rules.id, id));
+  refresh();
+}
+
+/**
+ * From the Unsorted list: "time that looks like this belongs to that project", saved as a rule so
+ * it sorts itself from now on, past time included. `projectId` may be "new" to make the project.
+ */
+export async function sortGroup(formData: FormData) {
+  const scope = await getScope();
+  const field = String(formData.get("field"));
+  const match = String(formData.get("match") ?? "").trim();
+  const choice = String(formData.get("projectId") ?? "");
+  if (!match || !choice) return;
+  const project =
+    choice === "new"
+      ? await makeProject(scope, String(formData.get("newName") ?? "").trim() || String(formData.get("label") ?? match))
+      : await scopeProject(scope, choice);
+  if (!project) return;
+  await addRuleTo(project.id, field, match, String(formData.get("app") ?? "").trim() || null);
+  refresh();
+}
+
+/** Moves a stretch of one person's time to a project by hand. An empty project means unsorted. */
+export async function assignTime(formData: FormData) {
+  const scope = await getScope();
+  const memberId = String(formData.get("memberId"));
+  const member = scope.members.find((m) => m.id === memberId);
+  const fromM = Number(formData.get("fromM"));
+  const toM = Number(formData.get("toM"));
+  if (!member || !Number.isInteger(fromM) || !Number.isInteger(toM) || toM <= fromM || toM - fromM > 1440) return;
+  const choice = String(formData.get("projectId") ?? "");
+  const project = choice ? await scopeProject(scope, choice) : null;
+  if (choice && !project) return;
+  await db.insert(schema.assignments).values({ memberId: member.id, fromM, toM, projectId: project?.id ?? null });
+  refresh();
+}
+
+export async function saveClient(formData: FormData) {
+  const scope = await getScope();
+  const name = String(formData.get("name") ?? "").trim().slice(0, 120);
+  const details = String(formData.get("details") ?? "").trim().slice(0, 1000);
+  if (!name) return;
+  const existing = await scopeClient(scope, formData.get("clientId"));
+  if (existing) await db.update(schema.clients).set({ name, details }).where(eq(schema.clients.id, existing.id));
+  else await db.insert(schema.clients).values({ orgId: scope.org.id, ownerMemberId: scope.ownerMemberId, name, details });
+  refresh();
+}
+
+export async function deleteClient(formData: FormData) {
+  const scope = await getScope();
+  const client = await scopeClient(scope, formData.get("clientId"));
+  if (!client) return;
+  await db.delete(schema.clients).where(eq(schema.clients.id, client.id));
+  refresh();
+}
+
+export async function createInvoice(_prev: FormState, formData: FormData): Promise<FormState> {
+  const scope = await getScope();
+  const client = await scopeClient(scope, formData.get("clientId"));
+  let from = String(formData.get("from") ?? "");
+  let to = String(formData.get("to") ?? "");
+  if (!client) return { error: "Choose a client." };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return { error: "Choose both dates." };
+  if (to < from) [from, to] = [to, from];
+  const { lines, skippedMinutes } = await draftLines(scope, client.id, from, to);
+  if (lines.length === 0) {
+    return {
+      error: skippedMinutes
+        ? "All the time for this client in those dates is already on another invoice."
+        : "There is no sorted time for this client's projects in those dates. Give the client a project first, or sort the time on the Projects page.",
+    };
+  }
+  const all = await scopeInvoices(scope);
+  const [invoice] = await db
+    .insert(schema.invoices)
+    .values({
+      orgId: scope.org.id,
+      ownerMemberId: scope.ownerMemberId,
+      clientId: client.id,
+      number: Math.max(0, ...all.map((i) => i.number)) + 1,
+      fromDay: from,
+      toDay: to,
+      issuedOn: dayOfMinute(Math.floor(Date.now() / 60_000), scope.org.timezone),
+      lines,
+      totalCents: lines.reduce((n, l) => n + l.amountCents, 0),
+    })
+    .returning();
+  refresh();
+  redirect(`${scope.base}/invoices/${invoice.id}`);
+}
+
+export async function updateInvoice(formData: FormData) {
+  const scope = await getScope();
+  const invoice = await scopeInvoice(scope, formData.get("invoiceId"));
+  if (!invoice || invoice.status !== "draft") return;
+  const lines = invoice.lines.map((l, i) => {
+    const hours = Number(formData.get(`hours-${i}`));
+    const minutes = Number.isFinite(hours) && hours >= 0 ? Math.min(Math.round(hours * 60), 100_000) : l.minutes;
+    const rateCents = cents(formData.get(`rate-${i}`));
+    return {
+      ...l,
+      description: String(formData.get(`description-${i}`) ?? l.description).trim().slice(0, 200) || l.description,
+      minutes,
+      rateCents,
+      amountCents: amount(minutes, rateCents),
+    };
+  });
+  await db
+    .update(schema.invoices)
+    .set({ lines, totalCents: lines.reduce((n, l) => n + l.amountCents, 0), notes: String(formData.get("notes") ?? "").trim().slice(0, 1000) })
+    .where(eq(schema.invoices.id, invoice.id));
+  refresh();
+}
+
+export async function setInvoiceStatus(formData: FormData) {
+  const scope = await getScope();
+  const invoice = await scopeInvoice(scope, formData.get("invoiceId"));
+  const status = String(formData.get("status"));
+  if (!invoice || !["draft", "sent", "paid"].includes(status)) return;
+  await db.update(schema.invoices).set({ status }).where(eq(schema.invoices.id, invoice.id));
+  refresh();
+}
+
+export async function deleteInvoice(formData: FormData) {
+  const scope = await getScope();
+  const invoice = await scopeInvoice(scope, formData.get("invoiceId"));
+  if (!invoice) return;
+  await db.delete(schema.invoices).where(eq(schema.invoices.id, invoice.id));
+  refresh();
+  redirect(`${scope.base}/invoices`);
+}
+
+/** Adds the owner as a person on their own team, so their work is tracked too. */
+export async function addMyself() {
+  const { org, user } = await requireOwner();
+  const [member] = await db.insert(schema.members).values({ orgId: org.id, name: user.name, email: user.email }).returning();
+  await newInvite(member.id);
+  revalidatePath("/settings");
 }

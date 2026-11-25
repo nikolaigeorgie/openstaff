@@ -4,11 +4,20 @@ import { db, schema } from "@/db";
 
 const records = [
   "How much you type and click, as counts only",
-  "Which app is in front, and the site name in a browser",
+  "Which app and window is in front, with its title",
+  "In a browser, the site and page address (not what is on the page)",
+  "The folder or repository you are working in",
+  "Whether you are on a call (never the sound)",
   "Claude Code usage: prompts sent, project folder, tokens",
   "Your git commits: time, repository, size and subject line",
 ];
-const never = ["What you type", "Screenshots or screen recording", "Page contents, full web addresses or window titles", "Your Claude conversations or code"];
+const never = [
+  "What you type",
+  "Screenshots or screen recording",
+  "Sound from your microphone or calls",
+  "Page contents, or anything in a private browser window",
+  "Your Claude conversations or code",
+];
 
 export default async function JoinPage({ params }: { params: Promise<{ code: string }> }) {
   const code = (await params).code.toUpperCase();

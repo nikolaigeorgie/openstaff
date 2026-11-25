@@ -1,9 +1,13 @@
-import { addDays, dayOfMinute } from "@openstaff/core";
+import { addDays, contextKey, dayOfMinute } from "@openstaff/core";
+import { eq } from "drizzle-orm";
+import { db, schema } from "@/db";
+import { getScope, scopeProjects } from "@/lib/scope";
+import { AssignSelect } from "./assign-select";
 import Link from "next/link";
-import { addAdjustment, deleteAdjustment } from "@/app/actions";
+import { addAdjustment, assignTime, deleteAdjustment } from "@/app/actions";
 import type { Member, Org } from "@/lib/auth";
 import { clock, compact, hm, longDay } from "@/lib/format";
-import { dayReport, type Usage } from "@/lib/report";
+import { dayReport, worked, type SortedMinute, type Usage } from "@/lib/report";
 import { Legend, Timeline } from "./timeline";
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -42,6 +46,32 @@ function Bars({ title, rows, empty }: { title: string; rows: Usage[]; empty: str
   );
 }
 
+interface Block {
+  fromM: number;
+  toM: number;
+  projectId: string | null;
+  personal: boolean;
+  minutes: number;
+  labels: Map<string, number>;
+}
+
+/** Stretches of worked time on one project, bridging pauses of a few minutes. */
+function blocks(minutes: SortedMinute[]): Block[] {
+  const out: Block[] = [];
+  for (const v of minutes) {
+    if (!worked(v)) continue;
+    const last = out[out.length - 1];
+    const same = last && last.projectId === v.projectId && last.personal === v.personal && v.m - last.toM <= 5;
+    const b = same ? last : { fromM: v.m, toM: v.m, projectId: v.projectId, personal: v.personal, minutes: 0, labels: new Map<string, number>() };
+    if (!same) out.push(b);
+    b.toM = v.m + 1;
+    b.minutes++;
+    const label = contextKey(v)?.label;
+    if (label) b.labels.set(label, (b.labels.get(label) ?? 0) + 1);
+  }
+  return out;
+}
+
 /** One person's day. Owners and the person themselves see the same thing. */
 export async function PersonDay({
   member,
@@ -58,7 +88,24 @@ export async function PersonDay({
 }) {
   const today = dayOfMinute(Math.floor(Date.now() / 60_000), org.timezone);
   const shown = day && /^\d{4}-\d{2}-\d{2}$/.test(day) && day <= today ? day : today;
-  const r = await dayReport(member, org, shown);
+  const scope = await getScope();
+  const reveal = scope.kind === "personal";
+  const [r, mine, all, summary] = await Promise.all([
+    dayReport(member, org, shown, reveal),
+    scopeProjects(scope),
+    db.select().from(schema.projects).where(eq(schema.projects.orgId, org.id)),
+    db.query.daySummaries.findFirst({ where: (t, { and, eq }) => and(eq(t.memberId, member.id), eq(t.day, shown)) }),
+  ]);
+  const known = new Map(all.filter((p) => p.ownerMemberId === null || (reveal && p.ownerMemberId === member.id)).map((p) => [p.id, p]));
+  const colors = new Map([...known.values()].map((p) => [p.id, p.color]));
+  const list = blocks(r.minutes);
+  const perProject = new Map<string, number>();
+  for (const b of list) {
+    const key = b.personal && !reveal ? "personal" : b.projectId && known.has(b.projectId) ? b.projectId : "unsorted";
+    perProject.set(key, (perProject.get(key) ?? 0) + b.minutes);
+  }
+  const projectRows = [...perProject.entries()].sort((a, b) => b[1] - a[1]);
+  const maxProject = Math.max(1, ...projectRows.map(([, n]) => n));
   const adjusted = r.adjustments.reduce((n, a) => n + a.minutes, 0);
   const idleShare = r.totals.verifiedMinutes + r.totals.idleMinutes;
   return (
@@ -78,7 +125,12 @@ export async function PersonDay({
         <Stat
           label="Counted time"
           value={hm(r.totals.verifiedMinutes + adjusted)}
-          hint={adjusted ? `${hm(r.totals.verifiedMinutes)} tracked, ${hm(adjusted)} added by hand` : idleShare ? `${hm(r.totals.idleMinutes)} idle left out` : undefined}
+          hint={[
+            adjusted ? `${hm(r.totals.verifiedMinutes)} tracked, ${hm(adjusted)} added by hand` : null,
+            r.totals.meetingMinutes ? `${hm(r.totals.meetingMinutes)} on calls` : null,
+            r.totals.personalMinutes ? `${hm(r.totals.personalMinutes)} on own projects not counted` : null,
+            !adjusted && !r.totals.meetingMinutes && !r.totals.personalMinutes && idleShare ? `${hm(r.totals.idleMinutes)} idle left out` : null,
+          ].filter(Boolean).join(" · ") || undefined}
         />
         <Stat label="Claude prompts" value={String(r.totals.claudePrompts)} hint={`${compact(r.totals.tokens)} tokens`} />
         <Stat label="Commits" value={String(r.totals.commits)} hint={r.commits.length ? `+${r.commits.reduce((n, c) => n + c.added, 0)} / -${r.commits.reduce((n, c) => n + c.removed, 0)} lines` : undefined} />
@@ -93,7 +145,7 @@ export async function PersonDay({
         {r.minutes.length === 0 ? (
           <p className="py-6 text-sm text-muted">Nothing recorded on this day.</p>
         ) : (
-          <Timeline minutes={r.minutes} hours={r.hours} fromM={r.fromM} toM={r.toM} />
+          <Timeline minutes={r.minutes} hours={r.hours} fromM={r.fromM} toM={r.toM} colors={colors} />
         )}
         {r.totals.weakMinutes > 0 && (
           <p className="mt-3 text-sm text-weak">
@@ -102,6 +154,75 @@ export async function PersonDay({
           </p>
         )}
       </section>
+
+      {summary && (
+        <section className="card p-5">
+          <h2 className="text-sm font-medium">Summary of the day</h2>
+          <p className="mt-2 whitespace-pre-line text-sm text-muted">{summary.text}</p>
+          <p className="mt-2 text-xs text-muted">Written by Claude on {member.name}&apos;s own computer from the list of what was open.</p>
+        </section>
+      )}
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="card p-5">
+          <h2 className="text-sm font-medium">By project</h2>
+          {projectRows.length === 0 ? (
+            <p className="mt-3 text-sm text-muted">No time worked on this day.</p>
+          ) : (
+            <ul className="mt-3 space-y-2">
+              {projectRows.map(([key, n]) => {
+                const p = known.get(key);
+                return (
+                  <li key={key} className="text-sm">
+                    <div className="flex justify-between gap-3">
+                      <span className="truncate">{p?.name ?? (key === "personal" ? "Own projects (private)" : "Unsorted")}</span>
+                      <span className="num shrink-0 text-muted">{hm(n)}</span>
+                    </div>
+                    <div className="mt-1 h-1.5 rounded-full bg-bg">
+                      <div className="h-1.5 rounded-full" style={{ width: `${(n * 100) / maxProject}%`, background: p?.color ?? (key === "personal" ? "var(--personal)" : "var(--idle)") }} />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+        <section className="card p-5">
+          <h2 className="text-sm font-medium">What happened, in order</h2>
+          {list.length === 0 ? (
+            <p className="mt-3 text-sm text-muted">No time worked on this day.</p>
+          ) : (
+            <ul className="mt-2 max-h-80 divide-y divide-border overflow-y-auto">
+              {list.map((b) => {
+                const shared = !!b.projectId && !mine.some((p) => p.id === b.projectId) && known.has(b.projectId);
+                return (
+                  <li key={b.fromM} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 text-sm">
+                    <div className="min-w-0 flex-1">
+                      <p className="num">{clock(b.fromM, org.timezone)} to {clock(b.toM, org.timezone)} · <span className="font-medium">{hm(b.minutes)}</span></p>
+                      <p className="truncate text-xs text-muted">
+                        {b.personal && !reveal
+                          ? "On their own project. Details are private."
+                          : [...b.labels.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([l]) => l).join(", ") || "No detail recorded"}
+                      </p>
+                    </div>
+                    {b.personal && !reveal ? null : shared && reveal ? (
+                      <span className="text-xs text-muted">{known.get(b.projectId!)?.name}</span>
+                    ) : (
+                      <AssignSelect
+                        action={assignTime}
+                        hidden={{ memberId: member.id, fromM: b.fromM, toM: b.toM }}
+                        projects={mine.map((p) => ({ id: p.id, name: p.name }))}
+                        value={b.projectId && mine.some((p) => p.id === b.projectId) ? b.projectId : ""}
+                        label={`Project for ${clock(b.fromM, org.timezone)}`}
+                      />
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Bars title="Apps" rows={r.apps} empty="No app activity recorded." />

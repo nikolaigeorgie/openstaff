@@ -6,12 +6,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const { org, user } = await requireOwner();
   return (
     <div className="min-h-screen">
-      <header className="border-b border-border bg-surface">
+      <header className="no-print border-b border-border bg-surface">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
           <Link href="/team" className="font-semibold tracking-tight">Open Staff</Link>
           <nav className="flex gap-4 text-sm">
             <Link href="/team" className="hover:text-accent">Team</Link>
+            <Link href="/projects" className="hover:text-accent">Projects</Link>
             <Link href="/payroll" className="hover:text-accent">Payroll</Link>
+            <Link href="/invoices" className="hover:text-accent">Invoices</Link>
             <Link href="/settings" className="hover:text-accent">Settings</Link>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm text-muted">

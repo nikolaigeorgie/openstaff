@@ -6,6 +6,8 @@ import { todaySummary } from "@/lib/today";
 
 const count = z.number().int().min(0).max(1_000_000);
 const minute = z.number().int().positive();
+/** Optional text, cut to length rather than refused: a long window title must not lose the minute. */
+const clip = (max: number) => z.string().nullish().transform((s) => (s ? s.slice(0, max) : null));
 
 const Body = z.object({
   appVersion: z.string().max(40).optional(),
@@ -19,6 +21,10 @@ const Body = z.object({
         app: z.string().max(120).nullish(),
         domain: z.string().max(253).nullish(),
         paused: z.boolean().default(false),
+        title: clip(300),
+        path: clip(300),
+        repo: clip(200),
+        call: z.boolean().default(false),
       }),
     )
     .max(5000)
@@ -86,6 +92,10 @@ export async function POST(req: Request) {
           app: sql`excluded.app`,
           domain: sql`excluded.domain`,
           paused: sql`excluded.paused`,
+          title: sql`excluded.title`,
+          path: sql`excluded.path`,
+          repo: sql`excluded.repo`,
+          call: sql`excluded.call`,
         },
       });
   }

@@ -11,6 +11,8 @@
   --active: #1a9c5e;
   --grace: #9bdcb8;
   --claude: #7c5cf0;
+  --meeting: #2f8fd8;
+  --personal: #b7b3a6;
   --idle: #dcdcd6;
   --paused: #e9a13b;
   --weak: #d9483b;
@@ -28,6 +30,8 @@
     --active: #3fc286;
     --grace: #2a6b4b;
     --claude: #9d85ff;
+    --meeting: #4aa8ee;
+    --personal: #5d5a50;
     --idle: #343834;
     --paused: #d99a3d;
     --weak: #ef6b5e;
@@ -45,6 +49,7 @@
   --color-active: var(--active);
   --color-grace: var(--grace);
   --color-claude: var(--claude);
+  --color-meeting: var(--meeting);
   --color-idle: var(--idle);
   --color-paused: var(--paused);
   --color-weak: var(--weak);
@@ -56,6 +61,20 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .invoice {
+    border: 0;
+    max-width: none;
+    padding: 0;
+  }
 }
 
 @layer components {

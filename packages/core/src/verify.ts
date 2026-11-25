@@ -25,13 +25,21 @@ export function mergeMinutes(records: MinuteRecord[]): MinuteRecord[] {
     }
     const prevWeight = prev.keys + prev.clicks;
     const nextWeight = r.keys + r.clicks;
+    // What was in front comes from one device as a whole, never mixed.
+    const front = nextWeight > prevWeight && r.app ? r : prev.app ? prev : r;
     byMinute.set(r.m, {
       m: r.m,
+      title: front.title,
+      path: front.path,
+      repo: front.repo ?? prev.repo ?? r.repo,
+      call: Boolean(prev.call || r.call),
+      claudeProjects: [...new Set([...(prev.claudeProjects ?? []), ...(r.claudeProjects ?? [])])],
+      commitRepos: [...new Set([...(prev.commitRepos ?? []), ...(r.commitRepos ?? [])])],
       keys: prev.keys + r.keys,
       clicks: prev.clicks + r.clicks,
       moves: prev.moves + r.moves,
-      app: nextWeight > prevWeight ? r.app ?? prev.app : prev.app ?? r.app,
-      domain: nextWeight > prevWeight ? r.domain ?? prev.domain : prev.domain ?? r.domain,
+      app: front.app ?? prev.app ?? r.app,
+      domain: front.app ? front.domain : prev.domain ?? r.domain,
       claudePrompts: prev.claudePrompts + r.claudePrompts,
       claudeActive: prev.claudeActive || r.claudeActive,
       tokens: prev.tokens + r.tokens,
@@ -49,7 +57,8 @@ export function mergeMinutes(records: MinuteRecord[]): MinuteRecord[] {
  * A minute counts when the tracker was running and not paused, and:
  *  1. there was human input in it, or
  *  2. it is within `graceMinutes` of the last input, or
- *  3. Claude is working on their prompt and it is within `claudeGraceMinutes` of the last input.
+ *  3. Claude is working on their prompt and it is within `claudeGraceMinutes` of the last input, or
+ *  4. they are on a call.
  *
  * Minutes with no record at all (computer asleep, tracker not running) never count.
  */
@@ -60,7 +69,11 @@ export function verifyMinutes(
   const sorted = mergeMinutes(records);
   const out: VerifiedMinute[] = [];
   let lastInput = Number.NEGATIVE_INFINITY;
+  let silentCall = 0;
+  let prevM = Number.NEGATIVE_INFINITY;
   for (const r of sorted) {
+    if (!r.call || r.paused || hasInput(r) || r.m - prevM > 5) silentCall = 0;
+    prevM = r.m;
     if (r.paused) {
       out.push({ ...r, status: "paused", verified: false });
       continue;
@@ -71,7 +84,10 @@ export function verifyMinutes(
       continue;
     }
     const since = r.m - lastInput;
-    if (since <= opts.graceMinutes) {
+    if (r.call) {
+      silentCall++;
+      out.push({ ...r, status: "meeting", verified: true, longCall: silentCall > opts.silentCallMinutes });
+    } else if (since <= opts.graceMinutes) {
       out.push({ ...r, status: "grace", verified: true });
     } else if (r.claudeActive && since <= opts.claudeGraceMinutes) {
       out.push({ ...r, status: "claude", verified: true });
@@ -107,7 +123,11 @@ export function summarizeHours(minutes: VerifiedMinute[]): HourSummary[] {
     const commits = sum(counted, (v) => v.commits);
     let evidence: Evidence = "normal";
     if (keys > 0 && (prompts > 0 || commits > 0)) evidence = "strong";
-    else if (counted.length >= 20 && keys === 0 && clicks === 0 && prompts === 0 && commits === 0)
+    // An ordinary call needs no typing to count; a very long silent one does not get that pass.
+    else if (
+      counted.filter((v) => v.status !== "meeting" || v.longCall).length >= 20 &&
+      keys === 0 && clicks === 0 && prompts === 0 && commits === 0
+    )
       evidence = "weak";
     out.push({ h, verifiedMinutes: counted.length, evidence });
   }
@@ -119,6 +139,13 @@ export interface Totals {
   weakMinutes: number;
   pausedMinutes: number;
   idleMinutes: number;
+  /** Counted minutes by kind. */
+  activeMinutes: number;
+  graceMinutes: number;
+  claudeMinutes: number;
+  meetingMinutes: number;
+  /** Time on the person's own private projects, not counted for the company. */
+  personalMinutes: number;
   keys: number;
   clicks: number;
   claudePrompts: number;
@@ -133,6 +160,11 @@ export function totals(minutes: VerifiedMinute[]): Totals {
     weakMinutes: sum(hours.filter((h) => h.evidence === "weak"), (h) => h.verifiedMinutes),
     pausedMinutes: minutes.filter((v) => v.status === "paused").length,
     idleMinutes: minutes.filter((v) => v.status === "idle").length,
+    activeMinutes: minutes.filter((v) => v.verified && v.status === "active").length,
+    graceMinutes: minutes.filter((v) => v.verified && v.status === "grace").length,
+    claudeMinutes: minutes.filter((v) => v.verified && v.status === "claude").length,
+    meetingMinutes: minutes.filter((v) => v.verified && v.status === "meeting").length,
+    personalMinutes: minutes.filter((v) => v.status === "personal").length,
     keys: sum(minutes, (v) => v.keys),
     clicks: sum(minutes, (v) => v.clicks),
     claudePrompts: sum(minutes, (v) => v.claudePrompts),

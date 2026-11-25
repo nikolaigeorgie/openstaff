@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, isNull } from "drizzle-orm";
 import { headers } from "next/headers";
-import { addMember, archiveMember, createInvite, revokeDevice, updateMember, updateOrg } from "@/app/actions";
+import { addMember, addMyself, archiveMember, createInvite, revokeDevice, updateMember, updateOrg } from "@/app/actions";
 import { Copy } from "@/components/copy";
 import { ConfirmButton, SaveButton } from "@/components/form-buttons";
 import { db, schema } from "@/db";
@@ -9,7 +9,7 @@ import { ago } from "@/lib/format";
 import { activeMembers } from "@/lib/report";
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ welcome?: string }> }) {
-  const { org } = await requireOwner();
+  const { org, user } = await requireOwner();
   const { welcome } = await searchParams;
   const members = await activeMembers(org.id);
   const ids = members.map((m) => m.id);
@@ -52,6 +52,13 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           </div>
           <button className="btn">Add person</button>
         </form>
+
+        {!members.some((m) => m.email === user.email) && (
+          <form action={addMyself} className="flex flex-wrap items-center gap-3 text-sm text-muted">
+            <span>Do you do billable work yourself?</span>
+            <button className="btn-quiet">Track my own work too</button>
+          </form>
+        )}
 
         {members.map((m) => {
           const invite = invites.find((i) => i.memberId === m.id);

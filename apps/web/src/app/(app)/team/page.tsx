@@ -3,6 +3,7 @@ import { Refresher } from "@/components/refresher";
 import { requireOwner } from "@/lib/auth";
 import { ago, hm } from "@/lib/format";
 import { teamReport, type TeamRow } from "@/lib/report";
+import { getScope, scopeProjects } from "@/lib/scope";
 
 const states: Record<TeamRow["state"], { text: string; dot: string }> = {
   working: { text: "Working now", dot: "var(--active)" },
@@ -25,6 +26,7 @@ function Spark({ hourly }: { hourly: number[] }) {
 export default async function TeamPage() {
   const { org } = await requireOwner();
   const rows = await teamReport(org);
+  const projectName = new Map((await scopeProjects(await getScope())).map((p) => [p.id, p.name]));
   const working = rows.filter((r) => r.state === "working").length;
   const total = rows.reduce((n, r) => n + r.today.verifiedMinutes, 0);
   return (
@@ -77,7 +79,7 @@ export default async function TeamPage() {
                         {states[r.state].text}
                         <span className="block text-xs text-muted">
                           {r.state === "working" || r.state === "idle"
-                            ? [r.app, r.domain].filter(Boolean).join(" · ") || " "
+                            ? [r.projectId && projectName.get(r.projectId), r.app, r.domain].filter(Boolean).join(" · ") || " "
                             : r.state === "offline"
                               ? `Last seen ${ago(r.lastSeenAt)}`
                               : " "}
