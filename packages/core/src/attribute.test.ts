@@ -98,6 +98,9 @@ describe("contextKey", () => {
     expect(contextKey(rec(0, { app: "Slack", title: "nami-dev (Channel) - Acme - Slack" }))).toMatchObject({
       field: "title", app: "Slack", match: "nami-dev (Channel)", label: "Slack · #nami-dev (Acme)",
     });
+    expect(contextKey(rec(0, { app: "Slack", title: "Jo Doe (DM) - Slab Dynasty - 35 new items - Slack" }))).toMatchObject({
+      label: "Slack · Jo Doe (Slab Dynasty)", wider: { match: "- Slab Dynasty" },
+    });
     expect(contextKey(rec(0, { app: "Cursor", title: "page.tsx — nami-site" }))).toMatchObject({ field: "title", match: "nami-site", app: "Cursor" });
     expect(contextKey(rec(0, { app: "Preview" }))).toMatchObject({ field: "app", match: "Preview" });
     expect(contextKey(rec(0, {}))).toBeNull();

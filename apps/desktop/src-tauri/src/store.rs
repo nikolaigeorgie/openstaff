@@ -18,6 +18,10 @@ pub struct MinuteRow {
     pub app: Option<String>,
     pub domain: Option<String>,
     pub paused: bool,
+    pub title: Option<String>,
+    pub path: Option<String>,
+    pub repo: Option<String>,
+    pub call: bool,
     #[serde(skip)]
     pub dirty: i64,
 }
@@ -79,6 +83,10 @@ impl Store {
              create table if not exists offsets (path text primary key, offset integer not null);
              create table if not exists repos (path text primary key, seen integer not null);",
         )?;
+        // Columns added in 0.2. Each fails harmlessly when it is already there.
+        for column in ["title text", "path text", "repo text", "call integer not null default 0"] {
+            let _ = conn.execute(&format!("alter table minutes add column {column}"), []);
+        }
         Ok(Store { conn: Mutex::new(conn) })
     }
 
@@ -107,11 +115,11 @@ impl Store {
 
     pub fn put_minute(&self, row: &MinuteRow) {
         let _ = self.conn().execute(
-            "insert into minutes (m, keys, clicks, moves, app, domain, paused, dirty)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
+            "insert into minutes (m, keys, clicks, moves, app, domain, paused, title, path, repo, call, dirty)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1)
              on conflict(m) do update set keys = ?2, clicks = ?3, moves = ?4, app = ?5, domain = ?6,
-               paused = ?7, dirty = dirty + 1",
-            params![row.m, row.keys, row.clicks, row.moves, row.app, row.domain, row.paused],
+               paused = ?7, title = ?8, path = ?9, repo = ?10, call = ?11, dirty = dirty + 1",
+            params![row.m, row.keys, row.clicks, row.moves, row.app, row.domain, row.paused, row.title, row.path, row.repo, row.call],
         );
     }
 
@@ -176,7 +184,7 @@ impl Store {
         let conn = self.conn();
         let mut batch = Batch::default();
         if let Ok(mut stmt) = conn.prepare(
-            "select m, keys, clicks, moves, app, domain, paused, dirty from minutes where dirty > 0 order by m limit ?1",
+            "select m, keys, clicks, moves, app, domain, paused, dirty, title, path, repo, call from minutes where dirty > 0 order by m limit ?1",
         ) {
             if let Ok(rows) = stmt.query_map([LIMIT], |r| {
                 Ok(MinuteRow {
@@ -188,6 +196,10 @@ impl Store {
                     domain: r.get(5)?,
                     paused: r.get(6)?,
                     dirty: r.get(7)?,
+                    title: r.get(8)?,
+                    path: r.get(9)?,
+                    repo: r.get(10)?,
+                    call: r.get(11)?,
                 })
             }) {
                 batch.minutes = rows.flatten().collect();

@@ -130,6 +130,8 @@ export interface ContextKey {
   app: string | null;
   /** How to show it to a person, e.g. "Slack · #general". */
   label: string;
+  /** A broader rule that would also catch it, e.g. everything in one Slack workspace. */
+  wider?: { match: string; label: string };
 }
 
 const SEPARATORS = [" — ", " – ", " - ", " | "];
@@ -149,12 +151,18 @@ export function contextKey(r: MinuteRecord): ContextKey | null {
   if (r.repo) return { field: "repo", match: r.repo, app: null, label: r.repo };
   if (r.domain) return { field: "site", match: r.domain, app: null, label: r.domain };
   if (app && r.title) {
-    const parts = titleParts(r.title).filter((p) => norm(p) !== norm(app));
+    // Unread counters ("35 new items", "(3)") change all day and say nothing about the work.
+    const parts = titleParts(r.title.replace(/^\(\d+\)\s*/, "")).filter((p) => norm(p) !== norm(app) && !/^\d+ new items?$/i.test(p));
     if (norm(app) === "slack" && parts.length > 0) {
+      const kind = parts[0].match(/\((channel|dm|private channel|thread)\)$/i)?.[1].toLowerCase();
       const channel = parts[0].replace(/^[*!•\s]+/, "").replace(/\s*\((channel|dm|private channel|thread)\)$/i, "");
       const workspace = parts.length > 1 ? parts[parts.length - 1] : null;
-      const shown = /^[#@]/.test(channel) || / /.test(channel) ? channel : `#${channel}`;
-      return { field: "title", match: parts[0], app, label: `Slack · ${shown}${workspace ? ` (${workspace})` : ""}` };
+      const shown = kind === "dm" || /^[#@]/.test(channel) ? channel : `#${channel}`;
+      return {
+        field: "title", match: parts[0], app,
+        label: `Slack · ${shown}${workspace ? ` (${workspace})` : ""}`,
+        wider: workspace ? { match: `- ${workspace}`, label: `everything in the ${workspace} Slack` } : undefined,
+      };
     }
     // Editors and most document apps put the workspace or document last.
     const subject = parts[parts.length - 1];

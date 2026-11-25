@@ -1,8 +1,12 @@
 //! Activity sensors.
 //!
 //! What this crate reads: how many key presses, clicks and mouse moves happened, how long the
-//! machine has been idle, the name of the app in front, and (macOS) the site domain of the
-//! front browser tab. It never reads which keys were pressed, window contents or page titles.
+//! machine has been idle, which app and window is in front (name and title), the address of the
+//! front browser tab without its query string, the folder the front terminal is working in, and
+//! whether the microphone is in use.
+//!
+//! What it never reads: which keys were pressed, anything drawn on the screen, page contents,
+//! sound, or anything at all from a private browser window.
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -47,23 +51,108 @@ impl Sensors {
         os::idle_seconds()
     }
 
-    /// Name of the app in front, e.g. "Code" or "Google Chrome".
-    pub fn front_app(&self) -> Option<String> {
-        os::front_app()
+    /// The app in front, e.g. "Code" or "Google Chrome", and its process id.
+    pub fn front(&self) -> Option<Front> {
+        os::front()
     }
 }
 
-/// Site domain of the front tab if `app` is a supported browser, e.g. "github.com".
-/// Only the host is kept; the rest of the address is dropped here and never leaves this function.
-pub fn browser_domain(app: &str) -> Option<String> {
-    let url = os::browser_url(app)?;
-    host_of(&url)
+pub struct Front {
+    pub app: String,
+    pub pid: i32,
+}
+
+/// A web page: where it is, never what is on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Page {
+    /// e.g. "github.com"
+    pub host: String,
+    /// e.g. "/acme/api/pulls". The query string and fragment are dropped.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Tab {
+    Page(Page),
+    /// A private or incognito window. Nothing about it is recorded.
+    Private,
+    /// Not a browser we can ask, or it did not answer.
+    Unknown,
 }
 
 /// True if `app` is a browser this crate knows how to ask for its front tab.
 pub fn is_browser(app: &str) -> bool {
     os::is_browser(app)
 }
+
+/// The front tab of `app` if it is a supported browser.
+pub fn browser_tab(app: &str) -> Tab {
+    match os::browser_url(app) {
+        Some((_, true)) => Tab::Private,
+        Some((url, false)) => page_of(&url).map(Tab::Page).unwrap_or(Tab::Unknown),
+        None => Tab::Unknown,
+    }
+}
+
+/// Title of the front window of the process, with private windows and sensitive apps left out.
+pub fn window_title(app: &str, pid: i32) -> Option<String> {
+    if is_sensitive_app(app) {
+        return None;
+    }
+    let title = os::window_title(pid)?;
+    let title = title.trim();
+    if title.is_empty() || is_private_title(title) {
+        return None;
+    }
+    Some(title.chars().take(200).collect())
+}
+
+/// Whether the system lets this app read window titles (macOS asks the person once).
+pub fn titles_allowed() -> bool {
+    os::titles_allowed()
+}
+
+/// Shows the system's own request to allow reading window titles, if not allowed yet.
+pub fn ask_for_titles() {
+    os::ask_for_titles()
+}
+
+/// Folder the front terminal (or an editor's terminal) is working in, if `pid` has one.
+pub fn working_dir(pid: i32) -> Option<String> {
+    os::working_dir(pid)
+}
+
+/// True while any app is using the microphone. Says nothing about the sound itself.
+pub fn mic_in_use() -> bool {
+    os::mic_in_use()
+}
+
+/// Apps whose window titles are personal by nature and are never read.
+pub fn is_sensitive_app(app: &str) -> bool {
+    const APPS: [&str; 16] = [
+        "1password", "bitwarden", "lastpass", "dashlane", "keepassxc", "keeper", "enpass", "passwords",
+        "keychain access", "messages", "facetime", "photos", "whatsapp", "signal", "telegram", "health",
+    ];
+    let name = app.to_ascii_lowercase();
+    APPS.iter().any(|a| name == *a || name.starts_with(&format!("{a} ")))
+}
+
+/// Browsers put these words in the title of a private window.
+pub fn is_private_title(title: &str) -> bool {
+    let t = title.to_ascii_lowercase();
+    ["inprivate", "incognito", "private browsing", "private window"].iter().any(|w| t.contains(w))
+}
+
+fn page_of(url: &str) -> Option<Page> {
+    let host = host_of(url)?;
+    let rest = url.trim().split_once("://")?.1;
+    let path = match rest.find('/') {
+        Some(i) => rest[i..].split(['?', '#']).next().unwrap_or("/"),
+        None => "/",
+    };
+    Some(Page { host, path: path.chars().take(200).collect() })
+}
+
 
 fn host_of(url: &str) -> Option<String> {
     let rest = url.trim().split_once("://").map(|(scheme, rest)| (scheme.to_ascii_lowercase(), rest))?;
@@ -81,7 +170,7 @@ fn host_of(url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::host_of;
+    use super::{host_of, is_private_title, is_sensitive_app, page_of};
 
     #[test]
     fn keeps_only_the_host() {
@@ -96,5 +185,25 @@ mod tests {
         assert_eq!(host_of("file:///Users/me/secret.html"), None);
         assert_eq!(host_of("about:blank"), None);
         assert_eq!(host_of(""), None);
+    }
+
+    #[test]
+    fn keeps_the_path_but_never_the_query() {
+        let p = page_of("https://www.github.com/org/repo/pulls?q=secret#frag").unwrap();
+        assert_eq!((p.host.as_str(), p.path.as_str()), ("github.com", "/org/repo/pulls"));
+        assert_eq!(page_of("https://claude.ai").unwrap().path, "/");
+        assert_eq!(page_of("https://x.com?token=abc").unwrap().path, "/");
+        assert!(page_of("chrome://settings").is_none());
+    }
+
+    #[test]
+    fn knows_what_not_to_read() {
+        assert!(is_private_title("New Tab - Google Chrome (Incognito)"));
+        assert!(is_private_title("Bank - [InPrivate] - Microsoft Edge"));
+        assert!(!is_private_title("Pull requests - GitHub"));
+        assert!(is_sensitive_app("1Password"));
+        assert!(is_sensitive_app("1Password 7"));
+        assert!(is_sensitive_app("Messages"));
+        assert!(!is_sensitive_app("Slack"));
     }
 }

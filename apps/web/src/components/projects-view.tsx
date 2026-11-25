@@ -183,7 +183,7 @@ export async function ProjectsView({ scope, from, to }: { scope: Scope; from?: s
                   </p>
                 </div>
                 <span className="num text-sm font-medium">{hm(g.minutes)}</span>
-                <form action={sortGroup} className="flex items-center gap-2">
+                <form action={sortGroup} className="flex flex-wrap items-center justify-end gap-2">
                   <input type="hidden" name="field" value={g.field} />
                   <input type="hidden" name="match" value={g.match} />
                   <input type="hidden" name="app" value={g.app ?? ""} />
@@ -195,6 +195,12 @@ export async function ProjectsView({ scope, from, to }: { scope: Scope; from?: s
                     ))}
                     <option value="new">New project “{g.field === "title" ? g.match : g.label}”</option>
                   </select>
+                  {g.wider && (
+                    <label className="flex items-center gap-1.5 text-xs text-muted">
+                      <input type="checkbox" name="widerMatch" value={g.wider.match} />
+                      and {g.wider.label}
+                    </label>
+                  )}
                   <button className="btn-quiet">Sort</button>
                 </form>
               </li>

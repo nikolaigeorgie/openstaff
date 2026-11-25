@@ -10,6 +10,10 @@ interface Status {
   server: string;
   version: string;
   error: string | null;
+  titles: boolean;
+  claudeFound: boolean;
+  assist: boolean;
+  assistNote: string | null;
 }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -29,6 +33,11 @@ function render(s: Status) {
   $("today").parentElement!.classList.toggle("paused", s.paused);
   $("pause").textContent = s.paused ? "Resume tracking" : "Pause for private time";
   $("version").textContent = `Version ${s.version}`;
+  $("titles").hidden = s.titles;
+  $("assist-row").hidden = !s.claudeFound;
+  $<HTMLInputElement>("assist").checked = s.assist;
+  $("assist-note").hidden = !s.assist || !s.assistNote;
+  $("assist-note").textContent = s.assistNote ?? "";
   const server = $<HTMLInputElement>("server");
   if (!server.value) server.value = s.server;
   const error = localError ?? s.error;
@@ -61,6 +70,13 @@ $("connect").addEventListener("submit", async (event) => {
 $("pause").addEventListener("click", () => {
   if (current) void invoke("set_paused", { paused: !current.paused });
 });
+
+$("allow-titles").addEventListener("click", () => void invoke("allow_titles"));
+$("assist").addEventListener("change", (event) => {
+  void invoke("set_assist", { on: (event.target as HTMLInputElement).checked });
+});
+// The permission is granted in System Settings, so look again when the window comes back.
+window.addEventListener("focus", () => void invoke<Status>("get_status").then(render));
 
 $("mine").addEventListener("click", async () => {
   localError = null;

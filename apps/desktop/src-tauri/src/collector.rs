@@ -1,8 +1,9 @@
-//! Once a second: read the input counters. Once a minute: write one row.
+//! Once a second: read the input counters. Every few seconds: note what is in front.
+//! Once a minute: write one row.
 
 use crate::store::{MinuteRow, Store};
 use crate::{now_minute, Shared};
-use sensors::{Counts, Sensors};
+use sensors::{Counts, Sensors, Tab};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -10,39 +11,94 @@ use std::time::Duration;
 
 /// After this long with no input at all, stop writing rows until the person comes back.
 const AWAY_SECONDS: f64 = 20.0 * 60.0;
+/// The microphone must be on this long before it is taken for a call rather than dictation.
+const CALL_AFTER_SECONDS: u32 = 120;
+
+/// What was in front at one moment. The one seen most in a minute stands for that minute.
+#[derive(Default, Clone, PartialEq, Eq, Hash)]
+struct Context {
+    app: String,
+    title: Option<String>,
+    domain: Option<String>,
+    path: Option<String>,
+    repo: Option<String>,
+}
 
 #[derive(Default)]
 struct Minute {
     counts: Counts,
-    apps: HashMap<String, u32>,
-    domains: HashMap<String, u32>,
+    contexts: HashMap<Context, u32>,
+    call_samples: u32,
     paused: bool,
 }
 
-fn top(votes: &HashMap<String, u32>) -> Option<String> {
-    votes.iter().max_by_key(|(_, n)| **n).map(|(name, _)| name.clone())
+/// Project name for a working folder: its repository, else the folder itself. The home folder
+/// and the disk root are nobody's project.
+fn repo_for(dir: &str) -> Option<String> {
+    let home = dirs::home_dir().map(|h| h.to_string_lossy().to_string());
+    if dir == "/" || home.as_deref() == Some(dir) {
+        return None;
+    }
+    crate::claude::repo_name(dir).or_else(|| {
+        std::path::Path::new(dir).file_name().map(|n| n.to_string_lossy().to_string())
+    })
+}
+
+fn look(sensors: &Sensors, with_tab: bool, last: &Option<Context>) -> Option<Context> {
+    let front = sensors.front()?;
+    let mut ctx = Context { app: front.app.clone(), ..Default::default() };
+    if sensors::is_browser(&front.app) {
+        // Asking the browser is slow, so reuse the last answer between asks while the app stays.
+        let same_app = last.as_ref().filter(|l| l.app == front.app);
+        if with_tab || same_app.is_none() {
+            match sensors::browser_tab(&front.app) {
+                Tab::Private => return Some(ctx),
+                Tab::Page(page) => {
+                    ctx.domain = Some(page.host);
+                    ctx.path = Some(page.path);
+                }
+                Tab::Unknown => {}
+            }
+        } else if let Some(l) = same_app {
+            ctx.domain = l.domain.clone();
+            ctx.path = l.path.clone();
+        }
+    } else if let Some(dir) = sensors::working_dir(front.pid) {
+        ctx.repo = repo_for(&dir);
+    }
+    ctx.title = sensors::window_title(&front.app, front.pid);
+    Some(ctx)
 }
 
 fn flush(store: &Store, m: i64, minute: &Minute, idle: f64) {
     let c = minute.counts;
+    let blank = MinuteRow {
+        m, keys: 0, clicks: 0, moves: 0, app: None, domain: None, paused: false,
+        title: None, path: None, repo: None, call: false, dirty: 1,
+    };
     if minute.paused {
         // Private time: note that it was paused, and nothing else.
-        store.put_minute(&MinuteRow { m, keys: 0, clicks: 0, moves: 0, app: None, domain: None, paused: true, dirty: 1 });
+        store.put_minute(&MinuteRow { paused: true, ..blank });
         return;
     }
     let had_input = c.keys > 0 || c.clicks > 0 || c.moves > 0;
-    if !had_input && idle > AWAY_SECONDS {
+    // On a call for most of the minute.
+    let call = minute.call_samples >= 6;
+    if !had_input && !call && idle > AWAY_SECONDS {
         return;
     }
+    let top = minute.contexts.iter().max_by_key(|(_, n)| **n).map(|(ctx, _)| ctx.clone()).unwrap_or_default();
     store.put_minute(&MinuteRow {
-        m,
         keys: c.keys as i64,
         clicks: c.clicks as i64,
         moves: c.moves as i64,
-        app: top(&minute.apps),
-        domain: top(&minute.domains),
-        paused: false,
-        dirty: 1,
+        app: Some(top.app).filter(|a| !a.is_empty()),
+        domain: top.domain,
+        title: top.title,
+        path: top.path,
+        repo: top.repo,
+        call,
+        ..blank
     });
 }
 
@@ -50,6 +106,8 @@ pub fn run(shared: Arc<Shared>) {
     let mut sensors = Sensors::start();
     let mut current = now_minute();
     let mut minute = Minute::default();
+    let mut last: Option<Context> = None;
+    let mut mic_seconds: u32 = 0;
     let mut tick: u64 = 0;
     loop {
         std::thread::sleep(Duration::from_secs(1));
@@ -69,22 +127,42 @@ pub fn run(shared: Arc<Shared>) {
         }
         if shared.paused.load(Ordering::Relaxed) {
             minute.paused = true;
+            mic_seconds = 0;
             continue;
         }
         minute.counts.keys = minute.counts.keys.saturating_add(counts.keys);
         minute.counts.clicks = minute.counts.clicks.saturating_add(counts.clicks);
         minute.counts.moves = minute.counts.moves.saturating_add(counts.moves);
 
-        // Sample the front app every 5 seconds, and the browser's site every 15, only while in use.
-        if tick % 5 == 0 && sensors.idle_seconds() < 60.0 {
-            if let Some(app) = sensors.front_app() {
-                if tick % 15 == 0 && sensors::is_browser(&app) {
-                    if let Some(domain) = sensors::browser_domain(&app) {
-                        *minute.domains.entry(domain).or_default() += 1;
-                    }
-                }
-                *minute.apps.entry(app).or_default() += 1;
+        if tick % 5 != 0 {
+            continue;
+        }
+        // A call counts with no typing at all, so it is watched even when the person is idle.
+        mic_seconds = if sensors::mic_in_use() { mic_seconds.saturating_add(5) } else { 0 };
+        let on_call = mic_seconds >= CALL_AFTER_SECONDS;
+        if on_call {
+            minute.call_samples += 1;
+        }
+        // What is in front, every 5 seconds while in use; the browser is asked every 15.
+        if sensors.idle_seconds() < 60.0 || on_call {
+            if let Some(ctx) = look(&sensors, tick % 15 == 0, &last) {
+                *minute.contexts.entry(ctx.clone()).or_default() += 1;
+                last = Some(ctx);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repo_for;
+
+    #[test]
+    fn home_and_root_are_not_projects() {
+        assert_eq!(repo_for("/"), None);
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(repo_for(&home.to_string_lossy()), None);
+        }
+        assert_eq!(repo_for("/tmp/definitely-not-a-repo-xyz").as_deref(), Some("definitely-not-a-repo-xyz"));
     }
 }

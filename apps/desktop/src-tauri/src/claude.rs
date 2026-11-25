@@ -44,7 +44,7 @@ fn project_name(cwd: &str) -> String {
 
 /// The repository a working folder belongs to (the nearest parent holding `.git`), so work in
 /// `shop/apps/web` and `shop/apps/api` is reported as one project, "shop".
-fn repo_name(cwd: &str) -> Option<String> {
+pub fn repo_name(cwd: &str) -> Option<String> {
     let mut dir = Path::new(cwd);
     loop {
         if dir.join(".git").exists() {
@@ -164,6 +164,10 @@ impl Scanner {
         for raw in bytes[..end].split(|b| *b == b'\n') {
             let Ok(text) = std::str::from_utf8(raw) else { continue };
             let Some(line) = parse_line(text) else { continue };
+            // The app's own question to Claude about sorting is not the person's work.
+            if line.cwd.ends_with(crate::assist::WORKDIR) {
+                continue;
+            }
             if line.m < oldest || store.was_paused(line.m) {
                 continue;
             }

@@ -1,3 +1,4 @@
+mod assist;
 mod claude;
 mod collector;
 mod git;
@@ -9,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use store::Store;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent, Wry};
 use tauri_plugin_autostart::ManagerExt as _;
@@ -34,6 +35,7 @@ pub struct Shared {
 struct TrayItems {
     today: MenuItem<Wry>,
     pause: MenuItem<Wry>,
+    assist: CheckMenuItem<Wry>,
 }
 
 pub fn now_minute() -> i64 {
@@ -51,6 +53,13 @@ struct Status {
     server: String,
     version: &'static str,
     error: Option<String>,
+    /// The system lets the app read window titles (macOS asks; Windows always does).
+    titles: bool,
+    /// Claude Code is installed here, so it can be asked to suggest projects.
+    claude_found: bool,
+    /// The person turned on daily project suggestions by Claude.
+    assist: bool,
+    assist_note: Option<String>,
 }
 
 fn status(shared: &Shared) -> Status {
@@ -64,6 +73,10 @@ fn status(shared: &Shared) -> Status {
         server: store.get("server").unwrap_or_else(|| DEFAULT_SERVER.to_string()),
         version: env!("CARGO_PKG_VERSION"),
         error: shared.error.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        titles: sensors::titles_allowed(),
+        claude_found: assist::find_claude().is_some(),
+        assist: store.get("assist").as_deref() == Some("on"),
+        assist_note: store.get("assist_note"),
     }
 }
 
@@ -86,6 +99,8 @@ fn refresh_ui(app: &AppHandle) {
         let _ = items.today.set_text(today);
         let _ = items.pause.set_text(if s.paused { "Resume tracking" } else { "Pause for private time" });
         let _ = items.pause.set_enabled(s.connected);
+        let _ = items.assist.set_checked(s.assist);
+        let _ = items.assist.set_enabled(s.connected && s.claude_found);
     }
     let _ = app.emit("status", s);
 }
@@ -147,6 +162,9 @@ fn connect_now(app: &AppHandle, code: String, server: Option<String>) -> Result<
     store.del("today_minutes");
     store.set("token", token);
     let _ = app.autolaunch().enable();
+    if !sensors::titles_allowed() {
+        sensors::ask_for_titles();
+    }
     shared.kick.store(true, Ordering::Relaxed);
     refresh_ui(app);
     Ok(status(&shared))
@@ -160,6 +178,57 @@ fn set_paused(app: AppHandle, paused: bool) {
 #[tauri::command(async)]
 fn open_my_page(app: AppHandle) -> Result<(), String> {
     open_my_page_now(&app)
+}
+
+/// Shows the system's request to let the app read window titles, and opens the settings page
+/// where it is granted.
+#[tauri::command]
+fn allow_titles(app: AppHandle) {
+    sensors::ask_for_titles();
+    #[cfg(target_os = "macos")]
+    let _ = app.opener().open_url("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility", None::<&str>);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
+fn set_assist_now(app: &AppHandle, on: bool) {
+    let shared = app.state::<Arc<Shared>>();
+    shared.store.set("assist", if on { "on" } else { "off" });
+    if on {
+        // Run soon after being switched on, not at the next daily turn.
+        shared.store.del("assist_day");
+        shared.kick.store(true, Ordering::Relaxed);
+    } else {
+        shared.store.del("assist_note");
+    }
+    refresh_ui(app);
+}
+
+#[tauri::command]
+fn set_assist(app: AppHandle, on: bool) {
+    set_assist_now(&app, on);
+}
+
+/// Once a day in the afternoon (or right after being switched on), ask Claude for suggestions.
+fn assist_if_due(app: &AppHandle, shared: &Arc<Shared>) {
+    use chrono::Timelike;
+    if shared.store.get("assist").as_deref() != Some("on") {
+        return;
+    }
+    let now = chrono::Local::now();
+    let today = now.format("%Y-%m-%d").to_string();
+    let switched_on = shared.store.get("assist_day").is_none();
+    if shared.store.get("assist_day").as_deref() == Some(today.as_str()) || (!switched_on && now.hour() < 16) {
+        return;
+    }
+    shared.store.set("assist_day", &today);
+    let Ok(dir) = app.path().app_data_dir() else { return };
+    let note = match assist::run(shared, &dir) {
+        Ok(0) => format!("Claude looked on {today}. Nothing new to suggest."),
+        Ok(n) => format!("Claude suggested projects for {n} items on {today}. Accept them under My projects."),
+        Err(e) => e,
+    };
+    shared.store.set("assist_note", &note);
 }
 
 #[cfg_attr(debug_assertions, allow(dead_code))]
@@ -223,6 +292,7 @@ fn worker(app: AppHandle, shared: Arc<Shared>) {
                 }
             }
             *shared.error.lock().unwrap_or_else(|e| e.into_inner()) = error;
+            assist_if_due(&app, &shared);
             if round % 120 == 0 {
                 shared.store.prune(now_minute() - 30 * 24 * 60);
             }
@@ -245,7 +315,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
-        .invoke_handler(tauri::generate_handler![get_status, connect, set_paused, open_my_page])
+        .invoke_handler(tauri::generate_handler![get_status, connect, set_paused, open_my_page, allow_titles, set_assist])
         .on_window_event(|window, event| {
             // Closing the window only hides it. The app keeps running in the tray.
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -271,11 +341,12 @@ pub fn run() {
             let today = MenuItem::with_id(app, "today", "Open Staff", false, None::<&str>)?;
             let pause = MenuItem::with_id(app, "pause", "Pause for private time", true, None::<&str>)?;
             let mine = MenuItem::with_id(app, "mine", "See what is recorded about me", true, None::<&str>)?;
+            let assist = CheckMenuItem::with_id(app, "assist", "Suggest projects with Claude each day", true, false, None::<&str>)?;
             let open = MenuItem::with_id(app, "open", "Open Open Staff", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&today, &PredefinedMenuItem::separator(app)?, &pause, &mine, &open, &PredefinedMenuItem::separator(app)?, &quit],
+                &[&today, &PredefinedMenuItem::separator(app)?, &pause, &mine, &assist, &open, &PredefinedMenuItem::separator(app)?, &quit],
             )?;
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
             TrayIconBuilder::with_id("main")
@@ -297,12 +368,16 @@ pub fn run() {
                             }
                         });
                     }
+                    "assist" => {
+                        let on = app.state::<Arc<Shared>>().store.get("assist").as_deref() == Some("on");
+                        set_assist_now(app, !on);
+                    }
                     "open" => show_window(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
-            app.manage(TrayItems { today, pause });
+            app.manage(TrayItems { today, pause, assist });
 
             if shared.store.get("token").is_none() {
                 show_window(app.handle());

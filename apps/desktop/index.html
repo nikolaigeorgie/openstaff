@@ -39,9 +39,18 @@
           <button id="pause" class="quiet">Pause for private time</button>
           <button id="mine" class="quiet">See what is recorded</button>
         </div>
+        <div class="notice" id="titles" hidden>
+          <p>To sort your time into projects by itself, Open Staff reads the title of the window in front. macOS needs your OK for that.</p>
+          <button id="allow-titles" class="quiet">Allow in System Settings</button>
+        </div>
+        <label class="check" id="assist-row" hidden>
+          <input type="checkbox" id="assist" />
+          <span>Let Claude on this computer suggest projects for unsorted time, once a day. It sees names of folders, sites and windows, under your own Claude account. You approve every suggestion.</span>
+        </label>
+        <p class="muted small" id="assist-note" hidden></p>
         <div class="facts">
-          <p><strong>Recorded:</strong> how much you type and click (counts only), the app or site in front, Claude Code usage, and your commits.</p>
-          <p><strong>Never recorded:</strong> what you type, your screen, page contents, or your Claude conversations.</p>
+          <p><strong>Recorded:</strong> how much you type and click (counts only); the app, window title, site and page address in front; the folder you work in; whether you are on a call; Claude Code usage; and your commits.</p>
+          <p><strong>Never recorded:</strong> what you type, your screen, sound, page contents, private browser windows, or your Claude conversations.</p>
           <p>There is no timer to start. Time counts while you work and stops when you stop. You can close this window; Open Staff stays in your menu bar or tray.</p>
         </div>
       </section>

@@ -2723,7 +2723,7 @@ checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 
 [[package]]
 name = "openstaff"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -3570,6 +3570,8 @@ dependencies = [
 name = "sensors"
 version = "0.1.0"
 dependencies = [
+ "core-foundation 0.10.1",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

@@ -322,7 +322,9 @@ export async function deleteRule(formData: FormData) {
 export async function sortGroup(formData: FormData) {
   const scope = await getScope();
   const field = String(formData.get("field"));
-  const match = String(formData.get("match") ?? "").trim();
+  // Ticking "everything in this Slack" swaps the one channel for the whole workspace.
+  const wider = String(formData.get("widerMatch") ?? "").trim();
+  const match = wider || String(formData.get("match") ?? "").trim();
   const choice = String(formData.get("projectId") ?? "");
   if (!match || !choice) return;
   const project =
