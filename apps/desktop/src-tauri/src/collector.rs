@@ -39,12 +39,47 @@ fn repo_for(dir: &str) -> Option<String> {
     if dir == "/" || home.as_deref() == Some(dir) {
         return None;
     }
+    // Settings folders in the home folder (~/.config, an app's profile) are not projects either,
+    // except the worktrees an agent app checks projects out into.
+    if let Some(rest) = home.as_deref().and_then(|h| dir.strip_prefix(h)) {
+        if rest.starts_with("/.") && !rest.contains("/worktrees/") {
+            return None;
+        }
+    }
     crate::claude::repo_name(dir).or_else(|| {
         std::path::Path::new(dir).file_name().map(|n| n.to_string_lossy().to_string())
     })
 }
 
-fn look(sensors: &Sensors, with_tab: bool, last: &Option<Context>) -> Option<Context> {
+/// Apps that run a coding agent for you and do not put the project in their window title.
+fn is_agent_app(app: &str) -> bool {
+    let name = app.to_ascii_lowercase();
+    if name == "claude" || name.contains("t3 code") || name.contains("codex") || name.contains("conductor") {
+        return true;
+    }
+    // T3 Code profiles are apps of their own, named after the profile ("B3 Code" for "b3").
+    let Some(home) = dirs::home_dir() else { return false };
+    std::fs::read_dir(home.join(".t3-profiles"))
+        .map(|dirs| {
+            dirs.flatten().any(|d| {
+                let profile = d.file_name().to_string_lossy().to_ascii_lowercase();
+                !profile.ends_with("-backup") && name.replace(' ', "").starts_with(&profile)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// The project an agent was working in during the last few minutes, from its own logs.
+fn agent_repo(store: &Store) -> Option<String> {
+    // A session started by an app is a better guess than one typed into a terminal.
+    ["agent_recent_app", "agent_recent"].iter().find_map(|key| {
+        let recent = store.get(key)?;
+        let (m, dir) = recent.split_once('|')?;
+        (now_minute() - m.parse::<i64>().ok()? <= 5).then(|| repo_for(dir)).flatten()
+    })
+}
+
+fn look(sensors: &Sensors, store: &Store, with_tab: bool, last: &Option<Context>) -> Option<Context> {
     let front = sensors.front()?;
     let mut ctx = Context { app: front.app.clone(), ..Default::default() };
     if sensors::is_browser(&front.app) {
@@ -65,6 +100,9 @@ fn look(sensors: &Sensors, with_tab: bool, last: &Option<Context>) -> Option<Con
         }
     } else if let Some(dir) = sensors::working_dir(front.pid) {
         ctx.repo = repo_for(&dir);
+    }
+    if ctx.repo.is_none() && is_agent_app(&front.app) {
+        ctx.repo = agent_repo(store);
     }
     ctx.title = sensors::window_title(&front.app, front.pid);
     Some(ctx)
@@ -145,7 +183,7 @@ pub fn run(shared: Arc<Shared>) {
         }
         // What is in front, every 5 seconds while in use; the browser is asked every 15.
         if sensors.idle_seconds() < 60.0 || on_call {
-            if let Some(ctx) = look(&sensors, tick % 15 == 0, &last) {
+            if let Some(ctx) = look(&sensors, &shared.store, tick % 15 == 0, &last) {
                 *minute.contexts.entry(ctx.clone()).or_default() += 1;
                 last = Some(ctx);
             }
@@ -162,6 +200,11 @@ mod tests {
         assert_eq!(repo_for("/"), None);
         if let Some(home) = dirs::home_dir() {
             assert_eq!(repo_for(&home.to_string_lossy()), None);
+        }
+        if let Some(home) = dirs::home_dir() {
+            let home = home.to_string_lossy();
+            assert_eq!(repo_for(&format!("{home}/.t3-profiles/slabops")), None);
+            assert_eq!(repo_for(&format!("{home}/.t3/worktrees/shop-x1")).as_deref(), Some("shop-x1"));
         }
         assert_eq!(repo_for("/tmp/definitely-not-a-repo-xyz").as_deref(), Some("definitely-not-a-repo-xyz"));
     }

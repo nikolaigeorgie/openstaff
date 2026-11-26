@@ -6,6 +6,7 @@ import {
   totals,
   verifyMinutes,
   attributeMinutes,
+  contextKey,
   type Assignment,
   type AttributedMinute,
   type HourSummary,
@@ -161,6 +162,22 @@ function usage(minutes: SortedMinute[], key: (v: SortedMinute) => string | null 
   return [...map.entries()].map(([name, minutes]) => ({ name, minutes })).sort((a, b) => b.minutes - a.minutes);
 }
 
+/** The app with what it was open on: "T3 Code · tigra", "Slack · #general (Acme)". */
+function appDetail(v: SortedMinute): string | null {
+  if (!v.app) return null;
+  if (v.domain) return v.app;
+  if (v.repo) return `${v.app} · ${v.repo}`;
+  const key = contextKey(v);
+  return key?.field === "title" ? key.label : v.app;
+}
+
+/** The site with the first part of the page address: "github.com/acme/api". */
+function siteDetail(v: SortedMinute): string | null {
+  if (!v.domain) return null;
+  const parts = (v.path ?? "").split("/").filter(Boolean).slice(0, 2);
+  return [v.domain, ...parts].join("/");
+}
+
 export async function dayReport(member: Member, org: Org, day: string, reveal = false): Promise<DayReport> {
   const [fromM, toM] = minuteRangeOfDay(day, org.timezone);
   const minutes = (await verifiedInRange(org.id, [member.id], fromM, toM, reveal)).get(member.id) ?? [];
@@ -189,8 +206,8 @@ export async function dayReport(member: Member, org: Org, day: string, reveal = 
     minutes,
     hours: summarizeHours(minutes),
     totals: totals(minutes),
-    apps: usage(minutes, (v) => v.app),
-    sites: usage(minutes, (v) => v.domain),
+    apps: usage(minutes, appDetail),
+    sites: usage(minutes, siteDetail),
     claude: [...projects.entries()]
       .map(([project, p]) => ({ project, prompts: p.prompts, tokens: p.tokens, sessions: p.sessions.size }))
       .sort((a, b) => b.tokens - a.tokens),

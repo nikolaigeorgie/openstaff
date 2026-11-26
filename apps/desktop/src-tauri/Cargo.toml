@@ -1,6 +1,6 @@
 [package]
 name = "openstaff"
-version = "0.2.0"
+version = "0.2.1"
 description = "Open Staff: verified work hours"
 authors = ["Open Staff"]
 edition = "2021"

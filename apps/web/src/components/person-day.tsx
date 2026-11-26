@@ -29,7 +29,7 @@ function Bars({ title, rows, empty }: { title: string; rows: Usage[]; empty: str
         <p className="mt-3 text-sm text-muted">{empty}</p>
       ) : (
         <ul className="mt-3 space-y-2">
-          {rows.slice(0, 8).map((r) => (
+          {rows.slice(0, 12).map((r) => (
             <li key={r.name} className="text-sm">
               <div className="flex justify-between gap-3">
                 <span className="truncate">{r.name}</span>
@@ -225,8 +225,8 @@ export async function PersonDay({
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <Bars title="Apps" rows={r.apps} empty="No app activity recorded." />
-        <Bars title="Websites" rows={r.sites} empty="No browser activity recorded." />
+        <Bars title="Apps and what they were open on" rows={r.apps} empty="No app activity recorded." />
+        <Bars title="Websites and pages" rows={r.sites} empty="No browser activity recorded." />
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
